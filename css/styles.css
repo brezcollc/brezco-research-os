@@ -468,6 +468,40 @@ a:hover { text-decoration: underline; }
 }
 .mark-reviewed:active { transform: translateY(1px); }
 
+/* ===================== RATING FILTER CHIPS ===================== */
+.rating-filter {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.chip {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  background: var(--navy-2);
+  border: 1px solid var(--border-soft);
+  color: var(--text-mute);
+  transition: background .12s ease, color .12s ease, border-color .12s ease, transform .06s ease;
+}
+.chip:hover { border-color: var(--gold-dark); color: var(--text); }
+.chip:active { transform: translateY(1px); }
+
+/* active states — filled with rating color, dark text */
+.chip.active { border-color: transparent; color: #12160a; }
+.chip[data-rating=""].active {
+  background: linear-gradient(180deg, var(--gold-light), var(--gold));
+}
+.chip-BUY.active   { background: var(--buy); }
+.chip-HOLD.active  { background: var(--hold); }
+.chip-SELL.active  { background: var(--sell); color: #180505; }
+.chip-AVOID.active { background: var(--sell); color: #180505; }
+.chip-NA.active    { background: var(--na); color: #e6ecf3; }
+
 /* ===================== SIDEBAR SORT ===================== */
 .sidebar-sort {
   display: flex;

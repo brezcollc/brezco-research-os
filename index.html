@@ -43,7 +43,9 @@
       <div class="sidebar-sort">
         <label for="sortSelect">Sort</label>
         <select id="sortSelect">
-          <option value="recent">Newest first</option>
+          <option value="recent">Most recent</option>
+          <option value="upside">Most upside first</option>
+          <option value="downside">Most downside first</option>
           <option value="stale">Most stale first</option>
         </select>
       </div>
@@ -59,6 +61,14 @@
         <div class="search-wrap">
           <span class="search-ico">⌕</span>
           <input type="search" id="searchInput" placeholder="Search ticker, company, thesis…" autocomplete="off" />
+        </div>
+        <div class="rating-filter" id="ratingFilter" role="group" aria-label="Filter by rating">
+          <button type="button" class="chip active" data-rating="">All</button>
+          <button type="button" class="chip chip-BUY" data-rating="BUY">BUY</button>
+          <button type="button" class="chip chip-HOLD" data-rating="HOLD">HOLD</button>
+          <button type="button" class="chip chip-SELL" data-rating="SELL">SELL</button>
+          <button type="button" class="chip chip-AVOID" data-rating="AVOID">AVOID</button>
+          <button type="button" class="chip chip-NA" data-rating="N/A">N/A</button>
         </div>
         <h2 class="section-title" id="sectionTitle">All Research</h2>
       </div>

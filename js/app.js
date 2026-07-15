@@ -13,7 +13,8 @@ const state = {
   entries: [],
   activeSector: '__ALL__',
   search: '',
-  sort: 'recent', // 'recent' | 'stale'
+  sort: 'recent',      // 'recent' | 'upside' | 'downside' | 'stale'
+  ratingFilter: null,  // null (all) | 'BUY' | 'HOLD' | 'SELL' | 'AVOID' | 'N/A'
 };
 
 const ALL = '__ALL__';
@@ -113,6 +114,7 @@ function visibleEntries() {
   const q = state.search.trim().toLowerCase();
   return state.entries.filter(e => {
     if (state.activeSector !== ALL && e.sector !== state.activeSector) return false;
+    if (state.ratingFilter && e.rating !== state.ratingFilter) return false;
     if (!q) return true;
     return (e.ticker + ' ' + e.company + ' ' + e.notes + ' ' + e.sector).toLowerCase().includes(q);
   });
@@ -121,7 +123,7 @@ function visibleEntries() {
 function renderCards() {
   el.sectionTitle.textContent = state.activeSector === ALL ? 'All Research' : state.activeSector;
 
-  const entries = visibleEntries().sort(state.sort === 'stale' ? sortByStale : sortEntries);
+  const entries = visibleEntries().sort(sortComparator());
   el.cardGrid.replaceChildren();
 
   if (entries.length === 0) {
@@ -142,6 +144,34 @@ function sortEntries(a, b) {
   if (da && !db) return -1;
   if (!da && db) return 1;
   return a.ticker.localeCompare(b.ticker);
+}
+
+/* Pick the active comparator from the sort control. */
+function sortComparator() {
+  switch (state.sort) {
+    case 'upside':   return sortByUpside('upside');
+    case 'downside': return sortByUpside('downside');
+    case 'stale':    return sortByStale;
+    default:         return sortEntries;
+  }
+}
+
+/* Computed upside/downside % to target, or null if not computable. */
+function upsideOf(e) {
+  return pct(num(e.price), num(e.target));
+}
+
+/* Sort by upside %. Entries with no computable upside always sink to the
+   bottom, regardless of direction. dir: 'upside' = highest first,
+   'downside' = most negative first. */
+function sortByUpside(dir) {
+  return (a, b) => {
+    const ua = upsideOf(a), ub = upsideOf(b);
+    if (ua == null && ub == null) return a.ticker.localeCompare(b.ticker);
+    if (ua == null) return 1;   // a → bottom
+    if (ub == null) return -1;  // b → bottom
+    return dir === 'upside' ? ub - ua : ua - ub;
+  };
 }
 
 /* most stale first: least-recently-reviewed at the top.
@@ -628,6 +658,15 @@ function wireStaticEvents() {
 
   el.searchInput.addEventListener('input', e => { state.search = e.target.value; renderCards(); });
   $('#sortSelect').addEventListener('change', e => { state.sort = e.target.value; renderCards(); });
+
+  // rating filter chips (single-select; empty data-rating = "All")
+  document.querySelectorAll('#ratingFilter .chip').forEach(chip =>
+    chip.addEventListener('click', () => {
+      state.ratingFilter = chip.dataset.rating || null;
+      document.querySelectorAll('#ratingFilter .chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      renderCards();
+    }));
 
   // close buttons + backdrop click + Esc
   document.querySelectorAll('[data-close]').forEach(b =>
