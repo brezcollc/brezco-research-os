@@ -15,6 +15,7 @@ const state = {
   search: '',
   sort: 'recent',      // 'recent' | 'upside' | 'downside' | 'stale'
   ratingFilter: null,  // null (all) | 'BUY' | 'HOLD' | 'SELL' | 'AVOID' | 'N/A'
+  statusFilter: null,  // null (all) | 'Holding' | 'Watching' | 'Passed' | 'Unset'
 };
 
 const ALL = '__ALL__';
@@ -115,6 +116,7 @@ function visibleEntries() {
   return state.entries.filter(e => {
     if (state.activeSector !== ALL && e.sector !== state.activeSector) return false;
     if (state.ratingFilter && e.rating !== state.ratingFilter) return false;
+    if (state.statusFilter && (e.status || 'Unset') !== state.statusFilter) return false;
     if (!q) return true;
     return (e.ticker + ' ' + e.company + ' ' + e.notes + ' ' + e.sector).toLowerCase().includes(q);
   });
@@ -277,6 +279,17 @@ function card(e) {
   co.title = e.company || '';
   ident.append(tk, co);
 
+  /* position-status pill — shown only when tagged (not "Unset").
+     Cool/neutral palette, deliberately distinct from the rating badge. */
+  const status = e.status || 'Unset';
+  if (status !== 'Unset') {
+    const pill = document.createElement('span');
+    pill.className = `status-pill status-${status}`;
+    pill.textContent = status;
+    pill.title = `Position status: ${status}`;
+    ident.appendChild(pill);
+  }
+
   const badge = document.createElement('span');
   badge.className = `badge badge-${ratingClass(e.rating)}`;
   badge.textContent = e.rating;
@@ -424,6 +437,7 @@ function openEntryModal(entry) {
   $('#f_ticker').value = editing ? entry.ticker : '';
   $('#f_company').value = editing ? entry.company : '';
   $('#f_rating').value = editing ? entry.rating : 'N/A';
+  $('#f_status').value = editing ? (entry.status || 'Unset') : 'Unset';
   $('#f_price').value = editing ? entry.price : '';
   $('#f_target').value = editing ? entry.target : '';
   $('#f_link').value = editing ? entry.link : '';
@@ -457,6 +471,7 @@ async function saveEntry(ev) {
     id: $('#f_id').value || undefined,
     ticker, company, sector,
     rating: $('#f_rating').value,
+    status: $('#f_status').value,
     price: $('#f_price').value.trim(),
     target: $('#f_target').value.trim(),
     link: $('#f_link').value.trim(),
@@ -658,6 +673,7 @@ function wireStaticEvents() {
 
   el.searchInput.addEventListener('input', e => { state.search = e.target.value; renderCards(); });
   $('#sortSelect').addEventListener('change', e => { state.sort = e.target.value; renderCards(); });
+  $('#statusFilter').addEventListener('change', e => { state.statusFilter = e.target.value || null; renderCards(); });
 
   // rating filter chips (single-select; empty data-rating = "All")
   document.querySelectorAll('#ratingFilter .chip').forEach(chip =>

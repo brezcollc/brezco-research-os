@@ -49,6 +49,16 @@
           <option value="stale">Most stale first</option>
         </select>
       </div>
+      <div class="sidebar-sort">
+        <label for="statusFilter">Status</label>
+        <select id="statusFilter">
+          <option value="">All positions</option>
+          <option value="Holding">Holding</option>
+          <option value="Watching">Watching</option>
+          <option value="Passed">Passed</option>
+          <option value="Unset">Unset</option>
+        </select>
+      </div>
       <nav class="sector-nav" id="sectorNav" aria-label="Sectors"></nav>
       <div class="sidebar-footer">
         <span id="lastRefresh">Prices not yet refreshed</span>
@@ -92,7 +102,7 @@
       </div>
       <form id="entryForm" class="modal-body">
         <input type="hidden" id="f_id" />
-        <div class="form-row">
+        <div class="form-row form-row-3">
           <label class="field">
             <span>Ticker <em>*</em></span>
             <input type="text" id="f_ticker" placeholder="AAPL" required autocomplete="off" />
@@ -105,6 +115,15 @@
               <option value="HOLD">HOLD</option>
               <option value="SELL">SELL</option>
               <option value="AVOID">AVOID</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Status</span>
+            <select id="f_status">
+              <option value="Unset">Unset</option>
+              <option value="Holding">Holding</option>
+              <option value="Watching">Watching</option>
+              <option value="Passed">Passed</option>
             </select>
           </label>
         </div>

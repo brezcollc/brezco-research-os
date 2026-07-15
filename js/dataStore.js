@@ -36,6 +36,7 @@ function normalize(raw) {
     company:   String(e.company || '').trim(),
     sector:    String(e.sector || '').trim(),
     rating:    normalizeRating(e.rating),
+    status:    normalizeStatus(e.status),
     price:     e.price != null ? String(e.price).trim() : '',
     target:    e.target != null ? String(e.target).trim() : '',
     link:      String(e.link || '').trim(),
@@ -47,6 +48,14 @@ function normalize(raw) {
     // (no migration write is forced for existing entries / seed data).
     lastReviewed: String(e.lastReviewed || '').trim(),
   };
+}
+
+/* Position status — what Ian actually did, separate from the rating call.
+   Missing/unknown -> "Unset" (no migration write forced on existing data). */
+function normalizeStatus(s) {
+  const v = String(s || 'Unset').trim().toLowerCase();
+  const map = { holding: 'Holding', watching: 'Watching', passed: 'Passed', unset: 'Unset' };
+  return map[v] || 'Unset';
 }
 
 function normalizeRating(r) {
