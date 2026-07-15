@@ -13,6 +13,7 @@ const state = {
   entries: [],
   activeSector: '__ALL__',
   search: '',
+  sort: 'recent', // 'recent' | 'stale'
 };
 
 const ALL = '__ALL__';
@@ -120,7 +121,7 @@ function visibleEntries() {
 function renderCards() {
   el.sectionTitle.textContent = state.activeSector === ALL ? 'All Research' : state.activeSector;
 
-  const entries = visibleEntries().sort(sortEntries);
+  const entries = visibleEntries().sort(state.sort === 'stale' ? sortByStale : sortEntries);
   el.cardGrid.replaceChildren();
 
   if (entries.length === 0) {
@@ -141,6 +142,61 @@ function sortEntries(a, b) {
   if (da && !db) return -1;
   if (!da && db) return 1;
   return a.ticker.localeCompare(b.ticker);
+}
+
+/* most stale first: least-recently-reviewed at the top.
+   Undated / never-reviewed entries are treated as infinitely stale. */
+function sortByStale(a, b) {
+  const va = daysSinceReviewed(a);
+  const vb = daysSinceReviewed(b);
+  const na = va == null ? Infinity : va;
+  const nb = vb == null ? Infinity : vb;
+  if (na !== nb) return nb - na; // larger "days ago" (more stale) first
+  return a.ticker.localeCompare(b.ticker);
+}
+
+/* ---------------- staleness helpers ---------------- */
+
+/* lastReviewed if set, else fall back to the entry's date (no migration write). */
+function effectiveReviewed(e) {
+  return e.lastReviewed || e.date || '';
+}
+
+/* Whole days between a YYYY-MM-DD date and today. null if unparseable/absent. */
+function daysSince(dateStr) {
+  if (!dateStr) return null;
+  const then = new Date(dateStr + 'T00:00:00');
+  if (isNaN(then.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.floor((today - then) / 86400000);
+}
+
+function daysSinceReviewed(e) {
+  return daysSince(effectiveReviewed(e));
+}
+
+/* Local today as YYYY-MM-DD (matches the <input type="date"> format). */
+function todayISO() {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/* Severity band → CSS class. <30 grey · 30–90 amber · 90+/never warm-red. */
+function staleBand(days) {
+  if (days == null) return 'stale-none';
+  if (days < 30) return 'stale-fresh';
+  if (days < 90) return 'stale-mid';
+  return 'stale-old';
+}
+
+function reviewedLabel(days) {
+  if (days == null) return 'Not yet reviewed';
+  if (days <= 0) return 'Reviewed today';
+  if (days === 1) return 'Reviewed 1 day ago';
+  return `Reviewed ${days} days ago`;
 }
 
 function ratingClass(r) {
@@ -260,6 +316,30 @@ function card(e) {
     node.appendChild(row);
   }
 
+  /* --- review / staleness row --- */
+  const rdays = daysSinceReviewed(e);
+  const reviewRow = document.createElement('div');
+  reviewRow.className = 'review-row ' + staleBand(rdays);
+
+  const rdot = document.createElement('span');
+  rdot.className = 'review-dot';
+
+  const rlabel = document.createElement('span');
+  rlabel.className = 'review-label';
+  rlabel.textContent = reviewedLabel(rdays);
+  if (e.lastReviewed) rlabel.title = 'Last reviewed ' + e.lastReviewed;
+  else if (e.date) rlabel.title = 'Never marked reviewed — using report date ' + e.date;
+
+  const markBtn = document.createElement('button');
+  markBtn.type = 'button';
+  markBtn.className = 'mark-reviewed';
+  markBtn.textContent = '✓ Mark reviewed';
+  markBtn.title = 'Set last reviewed to today';
+  markBtn.addEventListener('click', ev => { ev.stopPropagation(); markReviewed(e.id); });
+
+  reviewRow.append(rdot, rlabel, markBtn);
+  node.appendChild(reviewRow);
+
   /* --- footer: date + open report --- */
   const foot = document.createElement('div');
   foot.className = 'card-foot';
@@ -357,7 +437,11 @@ async function saveEntry(ev) {
   // preserve any live-price data on edit
   if (entry.id) {
     const existing = state.entries.find(e => e.id === entry.id);
-    if (existing) { entry.livePrice = existing.livePrice; entry.liveAsOf = existing.liveAsOf; }
+    if (existing) {
+      entry.livePrice = existing.livePrice;
+      entry.liveAsOf = existing.liveAsOf;
+      entry.lastReviewed = existing.lastReviewed;
+    }
   }
 
   await dataStore.upsert(entry);
@@ -365,6 +449,14 @@ async function saveEntry(ev) {
   closeModal(entryModal);
   render();
   toast(entry.id && $('#f_id').value ? 'Research updated.' : 'Research added.', 'ok');
+}
+
+/* Bump an entry back to "fresh" — stamp lastReviewed = today. */
+async function markReviewed(id) {
+  await dataStore.markReviewed(id, todayISO());
+  state.entries = await dataStore.getAll();
+  renderCards();
+  toast('Marked reviewed today.', 'ok');
 }
 
 async function deleteEntry() {
@@ -535,6 +627,7 @@ function wireStaticEvents() {
   $('#exportDataBtn').addEventListener('click', exportData);
 
   el.searchInput.addEventListener('input', e => { state.search = e.target.value; renderCards(); });
+  $('#sortSelect').addEventListener('change', e => { state.sort = e.target.value; renderCards(); });
 
   // close buttons + backdrop click + Esc
   document.querySelectorAll('[data-close]').forEach(b =>

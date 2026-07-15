@@ -43,6 +43,9 @@ function normalize(raw) {
     notes:     String(e.notes || '').trim(),
     livePrice: e.livePrice != null ? String(e.livePrice) : '',
     liveAsOf:  e.liveAsOf || '',
+    // Optional. When absent, callers fall back to `date` at render time
+    // (no migration write is forced for existing entries / seed data).
+    lastReviewed: String(e.lastReviewed || '').trim(),
   };
 }
 
@@ -144,6 +147,17 @@ export const dataStore = {
     }
     await backend.writeAll(all);
     return count;
+  },
+
+  /* Stamp a single entry's lastReviewed date (YYYY-MM-DD). */
+  async markReviewed(id, dateStr) {
+    const all = await backend.readAll();
+    const e = all.find(x => x.id === id);
+    if (e) {
+      e.lastReviewed = dateStr;
+      await backend.writeAll(all);
+    }
+    return e || null;
   },
 
   async remove(id) {

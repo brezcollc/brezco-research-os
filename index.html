@@ -40,6 +40,13 @@
         <button class="btn btn-gold btn-block" id="addBtn">+ Add Research</button>
         <button class="btn btn-outline btn-block" id="importBtn">⇪ Paste from Claude</button>
       </div>
+      <div class="sidebar-sort">
+        <label for="sortSelect">Sort</label>
+        <select id="sortSelect">
+          <option value="recent">Newest first</option>
+          <option value="stale">Most stale first</option>
+        </select>
+      </div>
       <nav class="sector-nav" id="sectorNav" aria-label="Sectors"></nav>
       <div class="sidebar-footer">
         <span id="lastRefresh">Prices not yet refreshed</span>

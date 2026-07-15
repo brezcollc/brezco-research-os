@@ -31,6 +31,11 @@
   --up:    #3ecf7a;
   --down:  #ef5f52;
 
+  /* Staleness bands */
+  --stale-fresh: #7c8798;  /* <30 days  — neutral grey */
+  --stale-mid:   #e0b64a;  /* 30–90     — amber */
+  --stale-old:   #ef8258;  /* 90+/never — warm red-orange */
+
   --border:      rgba(201, 169, 97, 0.14);
   --border-soft: rgba(255, 255, 255, 0.06);
 
@@ -407,6 +412,87 @@ a:hover { text-decoration: underline; }
   color: var(--gold-light);
 }
 .card-link.disabled { color: var(--text-dim); pointer-events: none; opacity: 0.5; }
+
+/* ===================== REVIEW / STALENESS ===================== */
+.review-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 11.5px;
+}
+.review-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--stale-fresh);
+}
+.review-label {
+  font-family: var(--mono);
+  letter-spacing: 0.3px;
+  color: var(--stale-fresh);
+}
+/* band coloring — dot + label together */
+.review-row.stale-fresh .review-dot,
+.review-row.stale-fresh .review-label { color: var(--stale-fresh); }
+.review-row.stale-fresh .review-dot { background: var(--stale-fresh); }
+
+.review-row.stale-mid .review-label { color: var(--stale-mid); }
+.review-row.stale-mid .review-dot   { background: var(--stale-mid); box-shadow: 0 0 6px rgba(224,182,74,0.5); }
+
+.review-row.stale-old .review-label,
+.review-row.stale-none .review-label { color: var(--stale-old); font-weight: 600; }
+.review-row.stale-old .review-dot,
+.review-row.stale-none .review-dot   { background: var(--stale-old); box-shadow: 0 0 7px rgba(239,130,88,0.6); }
+
+.mark-reviewed {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.mark-reviewed:hover {
+  background: rgba(201,169,97,0.1);
+  color: var(--gold-light);
+  border-color: var(--gold-dark);
+}
+.mark-reviewed:active { transform: translateY(1px); }
+
+/* ===================== SIDEBAR SORT ===================== */
+.sidebar-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+}
+.sidebar-sort label {
+  font-size: 10.5px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.sidebar-sort select {
+  flex: 1;
+  background: var(--navy-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+.sidebar-sort select:focus { outline: none; border-color: var(--gold-dark); }
 
 /* ===================== EMPTY STATE ===================== */
 .empty-state { text-align: center; padding: 80px 20px; color: var(--text-dim); }
