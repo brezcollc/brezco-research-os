@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Brezco Research OS</title>
+  <meta name="description" content="Brezco Capital — private equity research dashboard." />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <!-- ===================== TOP BAR ===================== -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">▚</span>
+      <div class="brand-text">
+        <h1>BREZCO RESEARCH OS</h1>
+        <span class="brand-sub">Private Equity Research Terminal</span>
+      </div>
+    </div>
+
+    <div class="topbar-stats" id="topStats">
+      <div class="stat"><span class="stat-val" id="statReports">0</span><span class="stat-lbl">Reports</span></div>
+      <div class="stat"><span class="stat-val" id="statSectors">0</span><span class="stat-lbl">Sectors</span></div>
+      <div class="stat"><span class="stat-val" id="statTickers">0</span><span class="stat-lbl">Tickers</span></div>
+    </div>
+
+    <div class="topbar-actions">
+      <button class="btn btn-gold" id="refreshBtn" title="Fetch live prices from Finnhub">
+        <span class="btn-ico">⟳</span> Refresh Prices
+      </button>
+      <button class="btn btn-ghost btn-icon" id="settingsBtn" title="Settings" aria-label="Settings">⚙</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- ===================== SIDEBAR ===================== -->
+    <aside class="sidebar">
+      <div class="sidebar-actions">
+        <button class="btn btn-gold btn-block" id="addBtn">+ Add Research</button>
+        <button class="btn btn-outline btn-block" id="importBtn">⇪ Paste from Claude</button>
+      </div>
+      <nav class="sector-nav" id="sectorNav" aria-label="Sectors"></nav>
+      <div class="sidebar-footer">
+        <span id="lastRefresh">Prices not yet refreshed</span>
+      </div>
+    </aside>
+
+    <!-- ===================== MAIN ===================== -->
+    <main class="main">
+      <div class="main-head">
+        <div class="search-wrap">
+          <span class="search-ico">⌕</span>
+          <input type="search" id="searchInput" placeholder="Search ticker, company, thesis…" autocomplete="off" />
+        </div>
+        <h2 class="section-title" id="sectionTitle">All Research</h2>
+      </div>
+      <div class="card-grid" id="cardGrid"></div>
+      <div class="empty-state" id="emptyState" hidden>
+        <p class="empty-title">No research here yet</p>
+        <p class="empty-sub">Add a report or import a batch from Claude to get started.</p>
+      </div>
+    </main>
+  </div>
+
+  <!-- ===================== TOAST ===================== -->
+  <div class="toast-wrap" id="toastWrap" aria-live="polite"></div>
+
+  <!-- ===================== ADD / EDIT MODAL ===================== -->
+  <div class="modal-backdrop" id="entryModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="entryModalTitle">
+      <div class="modal-head">
+        <h3 id="entryModalTitle">Add Research</h3>
+        <button class="modal-close" data-close aria-label="Close">✕</button>
+      </div>
+      <form id="entryForm" class="modal-body">
+        <input type="hidden" id="f_id" />
+        <div class="form-row">
+          <label class="field">
+            <span>Ticker <em>*</em></span>
+            <input type="text" id="f_ticker" placeholder="AAPL" required autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Rating</span>
+            <select id="f_rating">
+              <option value="N/A">N/A</option>
+              <option value="BUY">BUY</option>
+              <option value="HOLD">HOLD</option>
+              <option value="SELL">SELL</option>
+              <option value="AVOID">AVOID</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Company Name <em>*</em></span>
+          <input type="text" id="f_company" placeholder="Apple Inc." required autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Sector <em>*</em></span>
+          <select id="f_sectorSelect"></select>
+        </label>
+        <label class="field" id="f_newSectorWrap" hidden>
+          <span>New Sector Name</span>
+          <input type="text" id="f_newSector" placeholder="e.g. Healthcare & Biotech" autocomplete="off" />
+        </label>
+        <div class="form-row">
+          <label class="field">
+            <span>Price at Report</span>
+            <input type="text" id="f_price" placeholder="112.52" inputmode="decimal" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Weighted Price Target</span>
+            <input type="text" id="f_target" placeholder="145.00" inputmode="decimal" autocomplete="off" />
+          </label>
+        </div>
+        <label class="field">
+          <span>Link to Report</span>
+          <input type="url" id="f_link" placeholder="https://drive.google.com/…" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Date</span>
+          <input type="date" id="f_date" />
+        </label>
+        <label class="field">
+          <span>Notes (one-line thesis)</span>
+          <textarea id="f_notes" rows="3" placeholder="Core thesis in a sentence."></textarea>
+        </label>
+        <div class="modal-foot">
+          <button type="button" class="btn btn-danger" id="deleteBtn" hidden>Delete</button>
+          <div class="foot-spacer"></div>
+          <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+          <button type="submit" class="btn btn-gold">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===================== IMPORT MODAL ===================== -->
+  <div class="modal-backdrop" id="importModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
+      <div class="modal-head">
+        <h3 id="importModalTitle">Paste from Claude</h3>
+        <button class="modal-close" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint">Paste a single JSON object or an array of objects. <code>ticker</code>, <code>company</code>, and <code>sector</code> are required; everything else is optional.</p>
+        <textarea id="importText" class="import-area" rows="12" placeholder='[{"ticker":"NVDA","company":"NVIDIA","sector":"AI Infra & Semis","rating":"BUY","target":"200","notes":"…"}]'></textarea>
+        <div class="import-error" id="importError" hidden></div>
+        <div class="modal-foot">
+          <div class="foot-spacer"></div>
+          <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+          <button type="button" class="btn btn-gold" id="importSubmit">Import</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== SETTINGS MODAL ===================== -->
+  <div class="modal-backdrop" id="settingsModal" hidden>
+    <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle">
+      <div class="modal-head">
+        <h3 id="settingsModalTitle">Settings</h3>
+        <button class="modal-close" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span>Finnhub API Key</span>
+          <input type="text" id="f_apiKey" placeholder="Paste your free Finnhub key" autocomplete="off" spellcheck="false" />
+        </label>
+        <p class="modal-hint">
+          Free key from <a href="https://finnhub.io" target="_blank" rel="noopener">finnhub.io</a>.
+          Stored only in this browser's localStorage and sent only to Finnhub when you refresh prices.
+        </p>
+        <div class="settings-danger">
+          <button type="button" class="btn btn-ghost btn-sm" id="exportDataBtn">Export all data (JSON)</button>
+        </div>
+        <div class="modal-foot">
+          <div class="foot-spacer"></div>
+          <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+          <button type="button" class="btn btn-gold" id="saveSettingsBtn">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

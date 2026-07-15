@@ -1,0 +1,164 @@
+/* ============================================================
+   dataStore.js — data-access abstraction layer
+   ------------------------------------------------------------
+   ALL reads/writes of research entries and settings go through
+   this module. The UI never touches localStorage directly.
+
+   PHASE 1 (now):   localStorage backend, implemented below.
+   PHASE 2 (later): swap the `backend` object for one that calls
+                    a real API (Supabase / Cloudflare D1). The
+                    public interface below is already async
+                    (returns Promises) so the UI does not change.
+
+   To migrate: implement an object with the same method
+   signatures as `localBackend` that does fetch() calls, then
+   set `const backend = apiBackend;`. Nothing in app.js changes.
+   ============================================================ */
+
+import { SEED_ENTRIES } from './seed.js';
+
+const KEYS = {
+  entries:  'brezco.research.entries.v1',
+  settings: 'brezco.research.settings.v1',
+  seeded:   'brezco.research.seeded.v1',
+};
+
+function uid() {
+  return 'r_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/* Normalize an arbitrary object into a valid entry shape. */
+function normalize(raw) {
+  const e = raw || {};
+  return {
+    id:        e.id || uid(),
+    ticker:    String(e.ticker || '').trim().toUpperCase(),
+    company:   String(e.company || '').trim(),
+    sector:    String(e.sector || '').trim(),
+    rating:    normalizeRating(e.rating),
+    price:     e.price != null ? String(e.price).trim() : '',
+    target:    e.target != null ? String(e.target).trim() : '',
+    link:      String(e.link || '').trim(),
+    date:      String(e.date || '').trim(),
+    notes:     String(e.notes || '').trim(),
+    livePrice: e.livePrice != null ? String(e.livePrice) : '',
+    liveAsOf:  e.liveAsOf || '',
+  };
+}
+
+function normalizeRating(r) {
+  const v = String(r || 'N/A').trim().toUpperCase();
+  return ['BUY', 'HOLD', 'SELL', 'AVOID', 'N/A'].includes(v) ? v : 'N/A';
+}
+
+/* ---------- localStorage backend ---------- */
+const localBackend = {
+  async readAll() {
+    try {
+      const raw = localStorage.getItem(KEYS.entries);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.map(normalize) : [];
+    } catch {
+      return [];
+    }
+  },
+  async writeAll(entries) {
+    localStorage.setItem(KEYS.entries, JSON.stringify(entries));
+  },
+  async readSettings() {
+    try {
+      return JSON.parse(localStorage.getItem(KEYS.settings) || '{}') || {};
+    } catch {
+      return {};
+    }
+  },
+  async writeSettings(obj) {
+    localStorage.setItem(KEYS.settings, JSON.stringify(obj));
+  },
+};
+
+// The single point of backend selection. Swap in Phase 2.
+const backend = localBackend;
+
+/* ============================================================
+   Public API — the only surface app.js is allowed to use.
+   ============================================================ */
+export const dataStore = {
+  /* Seed on first ever load, then return everything. */
+  async init() {
+    const alreadySeeded = localStorage.getItem(KEYS.seeded);
+    const current = await backend.readAll();
+    if (!alreadySeeded && current.length === 0) {
+      const seeded = SEED_ENTRIES.map(normalize);
+      await backend.writeAll(seeded);
+      localStorage.setItem(KEYS.seeded, '1');
+      return seeded;
+    }
+    return current;
+  },
+
+  async getAll() {
+    return backend.readAll();
+  },
+
+  async get(id) {
+    const all = await backend.readAll();
+    return all.find(e => e.id === id) || null;
+  },
+
+  /* Insert or update a single entry. Returns the saved entry. */
+  async upsert(entry) {
+    const clean = normalize(entry);
+    const all = await backend.readAll();
+    const idx = all.findIndex(e => e.id === clean.id);
+    if (idx >= 0) all[idx] = clean; else all.push(clean);
+    await backend.writeAll(all);
+    return clean;
+  },
+
+  /* Merge many entries at once (import). Returns saved entries. */
+  async bulkUpsert(entries) {
+    const all = await backend.readAll();
+    const byId = new Map(all.map(e => [e.id, e]));
+    const saved = [];
+    for (const raw of entries) {
+      const clean = normalize(raw);
+      byId.set(clean.id, clean);
+      saved.push(clean);
+    }
+    await backend.writeAll([...byId.values()]);
+    return saved;
+  },
+
+  /* Apply a live price to every entry sharing a ticker. */
+  async applyLivePrice(ticker, price, asOf) {
+    const all = await backend.readAll();
+    const t = String(ticker).toUpperCase();
+    let count = 0;
+    for (const e of all) {
+      if (e.ticker === t) {
+        e.livePrice = String(price);
+        e.liveAsOf = asOf;
+        count++;
+      }
+    }
+    await backend.writeAll(all);
+    return count;
+  },
+
+  async remove(id) {
+    const all = await backend.readAll();
+    await backend.writeAll(all.filter(e => e.id !== id));
+  },
+
+  /* ---- settings ---- */
+  async getSetting(key) {
+    const s = await backend.readSettings();
+    return s[key];
+  },
+  async setSetting(key, value) {
+    const s = await backend.readSettings();
+    s[key] = value;
+    await backend.writeSettings(s);
+  },
+};
