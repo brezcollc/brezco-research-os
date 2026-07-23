@@ -226,6 +226,23 @@ a:hover { text-decoration: underline; }
   text-align: center;
 }
 .sector-item.active .sector-count { color: var(--gold-light); background: rgba(201,169,97,0.14); }
+.sector-name { flex: 1; }
+.sector-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.sector-edit {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1;
+  padding: 3px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .12s ease, color .12s ease, background .12s ease;
+}
+.sector-item:hover .sector-edit,
+.sector-item.active .sector-edit { opacity: 1; }
+.sector-edit:hover { color: var(--gold-light); background: rgba(201,169,97,0.12); }
 .sector-divider { height: 1px; background: var(--border-soft); margin: 6px 4px; }
 
 .sidebar-footer {

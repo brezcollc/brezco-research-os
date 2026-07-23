@@ -219,6 +219,32 @@
     </div>
   </div>
 
+  <!-- ===================== RENAME SECTOR MODAL ===================== -->
+  <div class="modal-backdrop" id="renameModal" hidden>
+    <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="renameModalTitle">
+      <div class="modal-head">
+        <h3 id="renameModalTitle">Rename Sector</h3>
+        <button class="modal-close" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint">
+          Renaming <strong id="renameOldName"></strong> updates all
+          <strong id="renameCount"></strong> tagged with it — one edit, applied everywhere.
+        </p>
+        <label class="field">
+          <span>New sector name</span>
+          <input type="text" id="f_renameSector" autocomplete="off" spellcheck="false" />
+        </label>
+        <p class="modal-hint" id="renameMergeNote" hidden></p>
+        <div class="modal-foot">
+          <div class="foot-spacer"></div>
+          <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+          <button type="button" class="btn btn-gold" id="renameSaveBtn">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

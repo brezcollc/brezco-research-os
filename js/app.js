@@ -41,9 +41,16 @@ const el = {
 (async function boot() {
   state.entries = await dataStore.init();
   wireStaticEvents();
-  await populateSectorSelect();
+  populateSectorSelect();
   render();
   showLastRefresh();
+
+  // Surface any sector cleanup the hygiene pass did on this browser's data.
+  const fixed = dataStore.lastHygiene();
+  if (fixed.length) {
+    const n = fixed.length;
+    toast(`Cleaned ${n} sector value${n === 1 ? '' : 's'} (duplicates merged / blanks flagged).`, 'ok');
+  }
 })();
 
 /* ============================================================
@@ -52,7 +59,7 @@ const el = {
 function sectorsWithCounts() {
   const map = new Map();
   for (const e of state.entries) {
-    const s = e.sector || 'Uncategorized';
+    const s = e.sector || 'Needs Sector Review';
     map.set(s, (map.get(s) || 0) + 1);
   }
   return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
@@ -104,7 +111,21 @@ function sectorButton(key, label, count, isAll) {
   badge.className = 'sector-count';
   badge.textContent = count;
 
-  btn.append(name, badge);
+  const right = document.createElement('span');
+  right.className = 'sector-right';
+  if (!isAll) {
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'sector-edit';
+    edit.textContent = '✎';
+    edit.title = `Rename "${label}" everywhere`;
+    edit.setAttribute('aria-label', `Rename sector ${label}`);
+    edit.addEventListener('click', ev => { ev.stopPropagation(); openRenameModal(key); });
+    right.appendChild(edit);
+  }
+  right.appendChild(badge);
+  btn.append(name, right);
+
   const activate = () => { state.activeSector = key; render(); };
   btn.addEventListener('click', activate);
   btn.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } });
@@ -413,9 +434,23 @@ function card(e) {
 const entryModal = $('#entryModal');
 const entryForm = $('#entryForm');
 
-async function populateSectorSelect(selected) {
+/* Distinct, non-blank sector names currently in the dataset, sorted. */
+function existingSectors() {
+  const set = new Set();
+  for (const e of state.entries) {
+    const s = (e.sector || '').trim();
+    if (s) set.add(s);
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+/* Always builds a dropdown of every current sector plus a distinct
+   "+ New sector…" option last, and selects a REAL sector by default. The
+   manual-entry field only appears when the user explicitly picks New — never
+   as the default, and never because a stored value failed to match. */
+function populateSectorSelect(selected) {
   const sel = $('#f_sectorSelect');
-  const sectors = sectorsWithCounts().map(s => s[0]);
+  const sectors = existingSectors();
   sel.replaceChildren();
   for (const s of sectors) {
     const opt = document.createElement('option');
@@ -423,9 +458,18 @@ async function populateSectorSelect(selected) {
     sel.appendChild(opt);
   }
   const nw = document.createElement('option');
-  nw.value = '__NEW__'; nw.textContent = '+ New sector…';
+  nw.value = '__NEW__';
+  nw.textContent = '+ New sector…';
   sel.appendChild(nw);
-  if (selected != null) sel.value = selected;
+
+  const wanted = (selected || '').trim();
+  if (wanted && sectors.includes(wanted)) {
+    sel.value = wanted;        // editing: the entry's own sector
+  } else if (sectors.length) {
+    sel.value = sectors[0];    // default to a real sector, never manual entry
+  } else {
+    sel.value = '__NEW__';     // only when there are genuinely no sectors yet
+  }
 }
 
 function openEntryModal(entry) {
@@ -444,7 +488,7 @@ function openEntryModal(entry) {
   $('#f_date').value = editing ? entry.date : '';
   $('#f_notes').value = editing ? entry.notes : '';
 
-  populateSectorSelect(editing ? entry.sector : (sectorsWithCounts()[0]?.[0] || '__NEW__'));
+  populateSectorSelect(editing ? entry.sector : '');
   syncNewSectorField();
   openModal(entryModal);
   $('#f_ticker').focus();
@@ -502,6 +546,54 @@ async function markReviewed(id) {
   state.entries = await dataStore.getAll();
   renderCards();
   toast('Marked reviewed today.', 'ok');
+}
+
+/* ============================================================
+   Rename sector (global) — fix a name once, apply to every entry
+   ============================================================ */
+const renameModal = $('#renameModal');
+let renameOldName = null;
+
+function openRenameModal(sectorName) {
+  renameOldName = sectorName;
+  const count = state.entries.filter(e => (e.sector || '') === sectorName).length;
+  $('#renameOldName').textContent = sectorName;
+  $('#renameCount').textContent = `${count} ${count === 1 ? 'entry' : 'entries'}`;
+  const input = $('#f_renameSector');
+  input.value = sectorName;
+  updateRenameHint();
+  openModal(renameModal);
+  input.focus();
+  input.select();
+}
+
+/* Warn when the typed name matches another existing sector (= a merge). */
+function updateRenameHint() {
+  const target = $('#f_renameSector').value.trim();
+  const mergeInto = existingSectors().find(
+    s => s.toLowerCase() === target.toLowerCase() && s !== renameOldName
+  );
+  const note = $('#renameMergeNote');
+  if (mergeInto) {
+    note.textContent = `Will merge into existing sector “${mergeInto}”.`;
+    note.hidden = false;
+  } else {
+    note.hidden = true;
+  }
+}
+
+async function saveRename() {
+  const newName = $('#f_renameSector').value.trim();
+  if (!newName) { toast('Sector name can’t be blank.', 'err'); return; }
+  if (newName === renameOldName) { closeModal(renameModal); return; }
+
+  const moved = await dataStore.renameSector(renameOldName, newName);
+  state.entries = await dataStore.getAll();
+  // keep the sidebar selection pointing at the renamed sector if it was active
+  if (state.activeSector === renameOldName) state.activeSector = newName;
+  closeModal(renameModal);
+  render();
+  toast(`Renamed to “${newName}” — updated ${moved} ${moved === 1 ? 'entry' : 'entries'}.`, 'ok');
 }
 
 async function deleteEntry() {
@@ -671,6 +763,10 @@ function wireStaticEvents() {
   $('#saveSettingsBtn').addEventListener('click', saveSettings);
   $('#exportDataBtn').addEventListener('click', exportData);
 
+  $('#renameSaveBtn').addEventListener('click', saveRename);
+  $('#f_renameSector').addEventListener('input', updateRenameHint);
+  $('#f_renameSector').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveRename(); } });
+
   el.searchInput.addEventListener('input', e => { state.search = e.target.value; renderCards(); });
   $('#sortSelect').addEventListener('change', e => { state.sort = e.target.value; renderCards(); });
   $('#statusFilter').addEventListener('change', e => { state.statusFilter = e.target.value || null; renderCards(); });
@@ -693,5 +789,5 @@ function wireStaticEvents() {
 }
 
 function closeAllModals() {
-  [entryModal, importModal, settingsModal].forEach(closeModal);
+  [entryModal, importModal, settingsModal, renameModal].forEach(closeModal);
 }

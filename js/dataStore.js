@@ -50,6 +50,38 @@ function normalize(raw) {
   };
 }
 
+/* ---------------- sector hygiene ----------------
+   The canonical sector taxonomy. Sectors that differ only by case,
+   punctuation, whitespace, or "and" vs "&" are folded into these on load
+   so the sidebar never fragments into duplicates. Genuinely different
+   custom sectors are left untouched; blank sectors are routed to a
+   clearly-labeled review bucket rather than guessed. */
+export const CANONICAL_SECTORS = [
+  'AI Infra & Semis',
+  'Power & Energy',
+  'Defense & Security',
+  'Fintech & Consumer',
+  'Small-Cap Discovery',
+  'Company Deep Dives',
+  'Macro & Education',
+];
+export const REVIEW_SECTOR = 'Needs Sector Review';
+
+/* Normalized comparison key: lowercase, "and"->"&", strip everything but
+   alphanumerics and "&". "AI Infra and Semis" === "ai infra & semis". */
+function sectorKey(s) {
+  return String(s || '').toLowerCase().replace(/\band\b/g, '&').replace(/[^a-z0-9&]/g, '');
+}
+const CANON_BY_KEY = new Map(CANONICAL_SECTORS.map(s => [sectorKey(s), s]));
+
+/* Clean a single sector value: trim, fold to canonical if it matches one,
+   route blank to the review bucket, otherwise keep the trimmed custom name. */
+function hygieneSector(s) {
+  const trimmed = String(s || '').trim();
+  if (!trimmed) return REVIEW_SECTOR;
+  return CANON_BY_KEY.get(sectorKey(trimmed)) || trimmed;
+}
+
 /* Position status — what Ian actually did, separate from the rating call.
    Missing/unknown -> "Unset" (no migration write forced on existing data). */
 function normalizeStatus(s) {
@@ -96,7 +128,7 @@ const backend = localBackend;
    Public API — the only surface app.js is allowed to use.
    ============================================================ */
 export const dataStore = {
-  /* Seed on first ever load, then return everything. */
+  /* Seed on first ever load, then run sector hygiene, then return everything. */
   async init() {
     const alreadySeeded = localStorage.getItem(KEYS.seeded);
     const current = await backend.readAll();
@@ -104,9 +136,47 @@ export const dataStore = {
       const seeded = SEED_ENTRIES.map(normalize);
       await backend.writeAll(seeded);
       localStorage.setItem(KEYS.seeded, '1');
-      return seeded;
     }
-    return current;
+    // One-time-per-load sector cleanup: folds duplicate spellings to
+    // canonical names and routes blank sectors to the review bucket.
+    // Applies to whatever is in this browser, including data added earlier.
+    return this.runSectorHygiene();
+  },
+
+  /* Normalize every entry's sector in place; write back only if something
+     changed. Returns { entries, fixed } — fixed lists what was rewritten. */
+  async runSectorHygiene() {
+    const all = await backend.readAll();
+    const fixed = [];
+    for (const e of all) {
+      const cleaned = hygieneSector(e.sector);
+      if (cleaned !== e.sector) {
+        fixed.push({ ticker: e.ticker, from: e.sector, to: cleaned });
+        e.sector = cleaned;
+      }
+    }
+    if (fixed.length) await backend.writeAll(all);
+    this._lastHygiene = fixed;
+    return all;
+  },
+
+  /* What the most recent hygiene pass changed (for reporting in the UI). */
+  lastHygiene() {
+    return this._lastHygiene || [];
+  },
+
+  /* Rename a sector across every entry that uses it. If newName matches an
+     existing sector, this merges them. Returns the count of entries moved. */
+  async renameSector(oldName, newName) {
+    const target = String(newName || '').trim();
+    if (!target) return 0;
+    const all = await backend.readAll();
+    let count = 0;
+    for (const e of all) {
+      if ((e.sector || '') === oldName) { e.sector = target; count++; }
+    }
+    if (count) await backend.writeAll(all);
+    return count;
   },
 
   async getAll() {
