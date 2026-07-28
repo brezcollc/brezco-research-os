@@ -67,7 +67,7 @@
 
     <!-- ===================== MAIN ===================== -->
     <main class="main">
-      <div class="main-head">
+      <div class="main-head" id="mainHead">
         <div class="search-wrap">
           <span class="search-ico">⌕</span>
           <input type="search" id="searchInput" placeholder="Search ticker, company, thesis…" autocomplete="off" />
@@ -87,6 +87,7 @@
         <p class="empty-title">No research here yet</p>
         <p class="empty-sub">Add a report or import a batch from Claude to get started.</p>
       </div>
+      <div class="timeline-view" id="timelineView" hidden></div>
     </main>
   </div>
 
@@ -127,6 +128,7 @@
             </select>
           </label>
         </div>
+        <p class="dupe-note" id="dupeNote" hidden></p>
         <label class="field">
           <span>Company Name <em>*</em></span>
           <input type="text" id="f_company" placeholder="Apple Inc." required autocomplete="off" />

@@ -16,6 +16,7 @@ const state = {
   sort: 'recent',      // 'recent' | 'upside' | 'downside' | 'stale'
   ratingFilter: null,  // null (all) | 'BUY' | 'HOLD' | 'SELL' | 'AVOID' | 'N/A'
   statusFilter: null,  // null (all) | 'Holding' | 'Watching' | 'Passed' | 'Unset'
+  timelineTicker: null, // when set, main panel shows that ticker's thesis timeline
 };
 
 const ALL = '__ALL__';
@@ -29,6 +30,8 @@ const el = {
   sectorNav: $('#sectorNav'),
   cardGrid: $('#cardGrid'),
   emptyState: $('#emptyState'),
+  mainHead: $('#mainHead'),
+  timelineView: $('#timelineView'),
   sectionTitle: $('#sectionTitle'),
   searchInput: $('#searchInput'),
   lastRefresh: $('#lastRefresh'),
@@ -72,7 +75,22 @@ function uniqueTickerCount() {
 function render() {
   renderStats();
   renderSectorNav();
-  renderCards();
+  // Leave the timeline if its ticker no longer has any entries (e.g. all deleted).
+  if (state.timelineTicker && !state.entries.some(e => e.ticker === state.timelineTicker)) {
+    state.timelineTicker = null;
+  }
+  if (state.timelineTicker) {
+    el.mainHead.hidden = true;
+    el.cardGrid.hidden = true;
+    el.emptyState.hidden = true;
+    el.timelineView.hidden = false;
+    renderTimeline(state.timelineTicker);
+  } else {
+    el.mainHead.hidden = false;
+    el.cardGrid.hidden = false;
+    el.timelineView.hidden = true;
+    renderCards();
+  }
 }
 
 function renderStats() {
@@ -126,37 +144,84 @@ function sectorButton(key, label, count, isAll) {
   right.appendChild(badge);
   btn.append(name, right);
 
-  const activate = () => { state.activeSector = key; render(); };
+  const activate = () => { state.activeSector = key; state.timelineTicker = null; render(); };
   btn.addEventListener('click', activate);
   btn.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } });
   return btn;
 }
 
-function visibleEntries() {
+/* All reports for a real ticker, newest-first. MACRO entries are non-securities,
+   so each is its own timeline of one (never grouped with other MACRO pieces). */
+function reportsForTicker(ticker) {
+  return state.entries.filter(e => e.ticker === ticker).sort(sortEntries);
+}
+
+/* Group the whole dataset into ticker-tiles. Each tile: representative entry
+   (most recent = the "current view"), the full history, and a count. MACRO
+   entries are keyed by id so they stay individual tiles. */
+function allTiles() {
+  const groups = new Map();
+  for (const e of state.entries) {
+    const key = e.ticker === 'MACRO' ? 'MACRO::' + e.id : 'T::' + e.ticker;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e);
+  }
+  const tiles = [];
+  for (const arr of groups.values()) {
+    const sorted = [...arr].sort(sortEntries);
+    tiles.push({ rep: sorted[0], entries: sorted, count: sorted.length,
+                 grouped: sorted[0].ticker !== 'MACRO' });
+  }
+  return tiles;
+}
+
+/* Tiles visible under the current sector / rating / status / search. Sector,
+   rating and status filter on the representative (the "current" call); search
+   matches any report in the tile's history. */
+function visibleTiles() {
   const q = state.search.trim().toLowerCase();
-  return state.entries.filter(e => {
-    if (state.activeSector !== ALL && e.sector !== state.activeSector) return false;
-    if (state.ratingFilter && e.rating !== state.ratingFilter) return false;
-    if (state.statusFilter && (e.status || 'Unset') !== state.statusFilter) return false;
+  return allTiles().filter(t => {
+    const rep = t.rep;
+    if (state.activeSector !== ALL && rep.sector !== state.activeSector) return false;
+    if (state.ratingFilter && rep.rating !== state.ratingFilter) return false;
+    if (state.statusFilter && (rep.status || 'Unset') !== state.statusFilter) return false;
     if (!q) return true;
-    return (e.ticker + ' ' + e.company + ' ' + e.notes + ' ' + e.sector).toLowerCase().includes(q);
+    return t.entries.some(e =>
+      (e.ticker + ' ' + e.company + ' ' + e.notes + ' ' + e.sector).toLowerCase().includes(q));
   });
+}
+
+/* "3 reports · updated Mar, Jun, Oct" (chronological; year shown if they span). */
+function reportsSummary(entries) {
+  const n = entries.length;
+  const label = `${n} report${n === 1 ? '' : 's'}`;
+  const dated = entries.filter(e => e.date).map(e => e.date).sort();
+  if (!dated.length) return label;
+  const multiYear = new Set(dated.map(d => d.slice(0, 4))).size > 1;
+  const fmt = d => {
+    const mon = new Date(d + 'T00:00:00').toLocaleString('en-US', { month: 'short' });
+    return multiYear ? `${mon} '${d.slice(2, 4)}` : mon;
+  };
+  let months = dated.map(fmt);
+  if (months.length > 4) months = [...months.slice(0, 2), '…', months[months.length - 1]];
+  return `${label} · updated ${months.join(', ')}`;
 }
 
 function renderCards() {
   el.sectionTitle.textContent = state.activeSector === ALL ? 'All Research' : state.activeSector;
 
-  const entries = visibleEntries().sort(sortComparator());
+  const cmp = sortComparator();
+  const tiles = visibleTiles().sort((a, b) => cmp(a.rep, b.rep));
   el.cardGrid.replaceChildren();
 
-  if (entries.length === 0) {
+  if (tiles.length === 0) {
     el.emptyState.hidden = false;
     return;
   }
   el.emptyState.hidden = true;
 
   const frag = document.createDocumentFragment();
-  for (const e of entries) frag.appendChild(card(e));
+  for (const t of tiles) frag.appendChild(card(t.rep, t));
   el.cardGrid.appendChild(frag);
 }
 
@@ -279,7 +344,7 @@ function fmtMoney(v) {
   return n == null ? '—' : '$' + n.toFixed(2);
 }
 
-function card(e) {
+function card(e, tile) {
   const isMacro = e.ticker === 'MACRO';
   const node = document.createElement('article');
   node.className = `card rate-${ratingClass(e.rating)}`;
@@ -294,11 +359,28 @@ function card(e) {
   const tk = document.createElement('div');
   tk.className = 'card-ticker' + (isMacro ? ' macro' : '');
   tk.textContent = isMacro ? 'MACRO' : e.ticker;
+  // Clicking the SYMBOL opens the ticker's thesis timeline (background stays edit).
+  if (!isMacro) {
+    tk.classList.add('clickable');
+    tk.title = 'View thesis timeline';
+    tk.addEventListener('click', ev => { ev.stopPropagation(); openTimeline(e.ticker); });
+  }
   const co = document.createElement('div');
   co.className = 'card-company';
   co.textContent = e.company || '—';
   co.title = e.company || '';
   ident.append(tk, co);
+
+  /* --- multi-report indicator: "3 reports · updated Mar, Jun, Oct" --- */
+  if (tile && tile.count > 1) {
+    const hist = document.createElement('button');
+    hist.type = 'button';
+    hist.className = 'card-history';
+    hist.textContent = '🕘 ' + reportsSummary(tile.entries);
+    hist.title = 'View thesis timeline';
+    hist.addEventListener('click', ev => { ev.stopPropagation(); openTimeline(e.ticker); });
+    ident.appendChild(hist);
+  }
 
   /* position-status pill — shown only when tagged (not "Unset").
      Cool/neutral palette, deliberately distinct from the rating badge. */
@@ -429,6 +511,189 @@ function card(e) {
 }
 
 /* ============================================================
+   Ticker thesis timeline
+   ============================================================ */
+function openTimeline(ticker) {
+  state.timelineTicker = ticker;
+  render();
+  el.timelineView.scrollIntoView({ block: 'start' });
+}
+function closeTimeline() {
+  state.timelineTicker = null;
+  render();
+}
+
+/* Human-readable diff between an older and a newer report of the same ticker. */
+function diffChips(older, newer) {
+  const chips = [];
+  const rank = { AVOID: 0, SELL: 0, HOLD: 1, 'N/A': 1, BUY: 2 };
+  if (older.rating !== newer.rating) {
+    const dir = (rank[newer.rating] ?? 1) - (rank[older.rating] ?? 1);
+    chips.push({ label: 'Rating', text: `${older.rating} → ${newer.rating}`,
+                 cls: dir > 0 ? 'up' : dir < 0 ? 'down' : '' });
+  }
+  const os = older.status || 'Unset', ns = newer.status || 'Unset';
+  if (os !== ns) chips.push({ label: 'Status', text: `${os} → ${ns}`, cls: '' });
+
+  const ot = num(older.target), nt = num(newer.target);
+  if (ot !== nt && (ot != null || nt != null)) {
+    let text = `${fmtMoney(older.target)} → ${fmtMoney(newer.target)}`;
+    const p = pct(ot, nt);
+    let cls = '';
+    if (p != null) { text += ` (${fmtPct(p)})`; cls = p >= 0 ? 'up' : 'down'; }
+    chips.push({ label: 'Target', text, cls });
+  }
+  const op = num(older.price), np = num(newer.price);
+  if (op !== np && (op != null || np != null)) {
+    chips.push({ label: 'Price', text: `${fmtMoney(older.price)} → ${fmtMoney(newer.price)}`, cls: '' });
+  }
+  return chips;
+}
+
+function renderTimeline(ticker) {
+  const entries = reportsForTicker(ticker);           // newest-first
+  const rep = entries[0] || { ticker, company: '', sector: '' };
+  const view = el.timelineView;
+  view.replaceChildren();
+
+  /* --- header: back, identity, add-new-report --- */
+  const head = document.createElement('div');
+  head.className = 'tl-head';
+
+  const back = document.createElement('button');
+  back.type = 'button';
+  back.className = 'tl-back';
+  back.textContent = '← All Research';
+  back.addEventListener('click', closeTimeline);
+
+  const idwrap = document.createElement('div');
+  idwrap.className = 'tl-id';
+  const h = document.createElement('h2');
+  h.className = 'tl-ticker';
+  h.textContent = ticker;
+  const sub = document.createElement('div');
+  sub.className = 'tl-sub';
+  sub.textContent = `${rep.company || '—'} · ${rep.sector || '—'} · ${entries.length} report${entries.length === 1 ? '' : 's'}`;
+  idwrap.append(h, sub);
+
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'btn btn-gold tl-add';
+  addBtn.textContent = `+ Add new report for ${ticker}`;
+  addBtn.addEventListener('click', () =>
+    openEntryModal(null, { ticker, company: rep.company, sector: rep.sector }));
+
+  head.append(back, idwrap, addBtn);
+  view.appendChild(head);
+
+  /* --- vertical timeline: entry, then diff-since-previous, then older entry… --- */
+  const list = document.createElement('div');
+  list.className = 'tl-list';
+  entries.forEach((e, i) => {
+    list.appendChild(timelineEntry(e, i === 0));
+    const older = entries[i + 1];
+    if (older) list.appendChild(timelineDiff(older, e));
+  });
+  view.appendChild(list);
+}
+
+function timelineEntry(e, isCurrent) {
+  const row = document.createElement('div');
+  row.className = `tl-entry rate-${ratingClass(e.rating)}` + (isCurrent ? ' current' : '');
+  row.title = 'Click to edit this report';
+
+  const top = document.createElement('div');
+  top.className = 'tl-entry-top';
+  const left = document.createElement('div');
+  left.className = 'tl-entry-meta';
+  const dt = document.createElement('span');
+  dt.className = 'tl-date';
+  dt.textContent = e.date || 'No date';
+  left.appendChild(dt);
+  if (isCurrent) {
+    const cur = document.createElement('span');
+    cur.className = 'tl-current-tag';
+    cur.textContent = 'CURRENT';
+    left.appendChild(cur);
+  }
+  const badge = document.createElement('span');
+  badge.className = `badge badge-${ratingClass(e.rating)}`;
+  badge.textContent = e.rating;
+  const status = e.status || 'Unset';
+  top.appendChild(left);
+  if (status !== 'Unset') {
+    const pill = document.createElement('span');
+    pill.className = `status-pill status-${status}`;
+    pill.textContent = status;
+    left.appendChild(pill);
+  }
+  top.appendChild(badge);
+  row.appendChild(top);
+
+  const p = num(e.price), t = num(e.target);
+  if (p != null || t != null) {
+    const pr = document.createElement('div');
+    pr.className = 'tl-price';
+    let s = `${fmtMoney(e.price)}`;
+    if (t != null) {
+      s += ` → ${fmtMoney(e.target)}`;
+      const up = pct(p, t);
+      if (up != null) s += `  (${fmtPct(up)})`;
+    }
+    pr.textContent = s;
+    row.appendChild(pr);
+  }
+
+  if (e.notes) {
+    const notes = document.createElement('p');
+    notes.className = 'tl-notes';
+    notes.textContent = e.notes;
+    row.appendChild(notes);
+  }
+
+  const foot = document.createElement('div');
+  foot.className = 'tl-entry-foot';
+  const editHint = document.createElement('span');
+  editHint.className = 'tl-edit-hint';
+  editHint.textContent = '✎ Edit / delete';
+  foot.appendChild(editHint);
+  if (e.link) {
+    const a = document.createElement('a');
+    a.className = 'card-link';
+    a.textContent = 'Open report →';
+    a.href = e.link; a.target = '_blank'; a.rel = 'noopener';
+    a.addEventListener('click', ev => ev.stopPropagation());
+    foot.appendChild(a);
+  }
+  row.appendChild(foot);
+
+  row.addEventListener('click', () => openEntryModal(e));
+  return row;
+}
+
+function timelineDiff(older, newer) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tl-diff';
+  const chips = diffChips(older, newer);
+  if (!chips.length) {
+    const none = document.createElement('span');
+    none.className = 'tl-diff-none';
+    none.textContent = 'notes updated · no rating/price/target change';
+    wrap.appendChild(none);
+    return wrap;
+  }
+  for (const c of chips) {
+    const chip = document.createElement('span');
+    chip.className = 'tl-diff-chip' + (c.cls ? ' ' + c.cls : '');
+    const lab = document.createElement('strong');
+    lab.textContent = c.label + ': ';
+    chip.append(lab, document.createTextNode(c.text));
+    wrap.appendChild(chip);
+  }
+  return wrap;
+}
+
+/* ============================================================
    Add / Edit modal
    ============================================================ */
 const entryModal = $('#entryModal');
@@ -472,26 +737,55 @@ function populateSectorSelect(selected) {
   }
 }
 
-function openEntryModal(entry) {
+/* entry = the record to edit (null to add). prefill = {ticker,company,sector}
+   to seed a NEW follow-up report (from a ticker's timeline). */
+function openEntryModal(entry, prefill) {
   const editing = !!entry;
-  $('#entryModalTitle').textContent = editing ? 'Edit Research' : 'Add Research';
+  const seed = entry || prefill || {};
+  $('#entryModalTitle').textContent = editing ? 'Edit Research'
+    : (prefill ? `New report — ${prefill.ticker}` : 'Add Research');
   $('#deleteBtn').hidden = !editing;
 
   $('#f_id').value = editing ? entry.id : '';
-  $('#f_ticker').value = editing ? entry.ticker : '';
-  $('#f_company').value = editing ? entry.company : '';
+  $('#f_ticker').value = seed.ticker || '';
+  $('#f_company').value = seed.company || '';
   $('#f_rating').value = editing ? entry.rating : 'N/A';
   $('#f_status').value = editing ? (entry.status || 'Unset') : 'Unset';
   $('#f_price').value = editing ? entry.price : '';
   $('#f_target').value = editing ? entry.target : '';
   $('#f_link').value = editing ? entry.link : '';
-  $('#f_date').value = editing ? entry.date : '';
+  $('#f_date').value = editing ? entry.date : (prefill ? todayISO() : '');
   $('#f_notes').value = editing ? entry.notes : '';
 
-  populateSectorSelect(editing ? entry.sector : '');
+  populateSectorSelect(seed.sector || '');
   syncNewSectorField();
+  updateDupeNote();
   openModal(entryModal);
   $('#f_ticker').focus();
+}
+
+/* Non-blocking nudge: if the typed ticker already has prior reports (other than
+   the one being edited), surface a note with a link into its timeline. */
+function updateDupeNote() {
+  const note = $('#dupeNote');
+  const ticker = $('#f_ticker').value.trim().toUpperCase();
+  const editingId = $('#f_id').value;
+  if (!ticker || ticker === 'MACRO') { note.hidden = true; return; }
+  const priors = state.entries.filter(e => e.ticker === ticker && e.id !== editingId);
+  if (!priors.length) { note.hidden = true; return; }
+  note.replaceChildren();
+  const txt = document.createTextNode(
+    `📎 You have ${priors.length} prior report${priors.length === 1 ? '' : 's'} on ${ticker}. `);
+  const link = document.createElement('a');
+  link.href = '#';
+  link.textContent = 'View timeline →';
+  link.addEventListener('click', ev => {
+    ev.preventDefault();
+    closeModal(entryModal);
+    openTimeline(ticker);
+  });
+  note.append(txt, link);
+  note.hidden = false;
 }
 
 function syncNewSectorField() {
@@ -651,11 +945,21 @@ async function submitImport() {
   const { valid, error } = validateImport(text);
   if (error) { errBox.textContent = error; errBox.hidden = false; return; }
 
+  // Non-blocking nudge: which imported tickers already had prior reports?
+  const existingTickers = new Set(state.entries.map(e => e.ticker));
+  const followUps = [...new Set(valid
+    .map(o => String(o.ticker).trim().toUpperCase())
+    .filter(t => t && t !== 'MACRO' && existingTickers.has(t)))];
+
   await dataStore.bulkUpsert(valid);
   state.entries = await dataStore.getAll();
   closeModal(importModal);
   render();
   toast(`Imported ${valid.length} ${valid.length === 1 ? 'entry' : 'entries'}.`, 'ok');
+  if (followUps.length) {
+    const names = followUps.slice(0, 4).join(', ') + (followUps.length > 4 ? '…' : '');
+    toast(`Added to existing timelines: ${names}. Click a ticker symbol to see history.`, '');
+  }
 }
 
 /* ============================================================
@@ -758,6 +1062,7 @@ function wireStaticEvents() {
   entryForm.addEventListener('submit', saveEntry);
   $('#deleteBtn').addEventListener('click', deleteEntry);
   $('#f_sectorSelect').addEventListener('change', syncNewSectorField);
+  $('#f_ticker').addEventListener('input', updateDupeNote);
 
   $('#importSubmit').addEventListener('click', submitImport);
   $('#saveSettingsBtn').addEventListener('click', saveSettings);

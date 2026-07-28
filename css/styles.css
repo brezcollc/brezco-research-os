@@ -297,6 +297,8 @@ a:hover { text-decoration: underline; }
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 16px;
 }
+/* `display:grid` above beats the UA [hidden] rule, so hiding needs this override */
+.card-grid[hidden] { display: none; }
 
 .card {
   position: relative;
@@ -576,6 +578,102 @@ a:hover { text-decoration: underline; }
 .empty-state { text-align: center; padding: 80px 20px; color: var(--text-dim); }
 .empty-title { font-family: var(--serif); font-size: 20px; color: var(--text-mute); margin: 0 0 6px; }
 .empty-sub { font-size: 13.5px; margin: 0; }
+
+/* ===================== MULTI-REPORT / TIMELINE ===================== */
+.card-ticker.clickable { cursor: pointer; }
+.card-ticker.clickable:hover { color: var(--gold-light); text-decoration: underline; text-underline-offset: 3px; }
+
+.card-history {
+  display: inline-block;
+  margin-top: 8px;
+  background: rgba(201, 169, 97, 0.08);
+  border: 1px solid var(--border-soft);
+  color: var(--text-mute);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.3px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.card-history:hover { color: var(--gold-light); border-color: var(--gold-dark); background: rgba(201,169,97,0.14); }
+
+.timeline-view { max-width: 900px; }
+.tl-head {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid var(--border);
+}
+.tl-back {
+  background: var(--navy-3); border: 1px solid var(--border-soft); color: var(--text-mute);
+  font-family: var(--sans); font-size: 13px; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+}
+.tl-back:hover { background: var(--navy-4); color: var(--text); }
+.tl-id { flex: 1; min-width: 0; }
+.tl-ticker { font-family: var(--serif); font-size: 30px; letter-spacing: 1px; color: var(--text); margin: 0; }
+.tl-sub { font-size: 12.5px; color: var(--text-dim); margin-top: 3px; }
+.tl-add { white-space: nowrap; }
+
+.tl-list { position: relative; display: flex; flex-direction: column; padding-left: 22px; }
+.tl-list::before {
+  content: ""; position: absolute; left: 6px; top: 8px; bottom: 8px;
+  width: 2px; background: linear-gradient(var(--gold-dark), var(--border), transparent);
+}
+.tl-entry {
+  position: relative;
+  background: linear-gradient(180deg, var(--navy-2), var(--navy-1));
+  border: 1px solid var(--border-soft);
+  border-left: 4px solid var(--na);
+  border-radius: 10px;
+  padding: 14px 16px; margin: 6px 0;
+  cursor: pointer;
+  transition: border-color .15s ease, transform .08s ease;
+}
+.tl-entry:hover {
+  transform: translateX(2px);
+  border-top-color: var(--border); border-right-color: var(--border); border-bottom-color: var(--border);
+}
+.tl-entry.rate-BUY   { border-left-color: var(--buy); }
+.tl-entry.rate-HOLD  { border-left-color: var(--hold); }
+.tl-entry.rate-SELL  { border-left-color: var(--sell); }
+.tl-entry.rate-AVOID { border-left-color: var(--sell); }
+.tl-entry.rate-NA    { border-left-color: var(--na); }
+.tl-entry::before {
+  content: ""; position: absolute; left: -20px; top: 20px;
+  width: 11px; height: 11px; border-radius: 50%;
+  background: var(--navy-4); border: 2px solid var(--gold-dark);
+}
+.tl-entry.current::before { background: var(--gold); box-shadow: 0 0 8px var(--gold); }
+
+.tl-entry-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tl-entry-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tl-date { font-family: var(--mono); font-size: 12.5px; color: var(--text-mute); }
+.tl-current-tag {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 1px; color: var(--gold-light);
+  background: rgba(201,169,97,0.14); border: 1px solid var(--border); padding: 1px 7px; border-radius: 4px;
+}
+.tl-price { font-family: var(--mono); font-size: 13px; color: var(--text); margin-top: 9px; }
+.tl-notes { font-size: 12.5px; line-height: 1.5; color: var(--text-mute); margin: 8px 0 0; }
+.tl-entry-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 11px; }
+.tl-edit-hint { font-size: 11px; color: var(--text-dim); }
+.tl-entry:hover .tl-edit-hint { color: var(--gold-light); }
+
+.tl-diff { display: flex; flex-wrap: wrap; gap: 8px; padding: 7px 0 7px 2px; }
+.tl-diff-chip {
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-mute);
+  background: var(--navy-2); border: 1px solid var(--border-soft); border-radius: 6px; padding: 3px 10px;
+}
+.tl-diff-chip strong { color: var(--text-dim); font-weight: 600; }
+.tl-diff-chip.up   { color: var(--up);   border-color: rgba(62,207,122,0.32); }
+.tl-diff-chip.down { color: var(--down); border-color: rgba(239,95,82,0.32); }
+.tl-diff-none { font-size: 11px; color: var(--text-dim); font-style: italic; padding-left: 2px; }
+
+.dupe-note {
+  font-size: 12px; color: var(--gold-light);
+  background: rgba(201,169,97,0.08); border: 1px solid var(--border-soft);
+  border-radius: 8px; padding: 8px 11px; margin: -4px 0 14px; line-height: 1.5;
+}
+.dupe-note a { font-weight: 600; }
 
 /* ===================== MODALS ===================== */
 .modal-backdrop {
