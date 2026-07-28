@@ -8,10 +8,18 @@
 import { dataStore } from './dataStore.js';
 import { refreshPrices } from './prices.js';
 
+/* ============================================================
+   Review Queue thresholds — tweak these freely.
+   ============================================================ */
+const QUEUE_STALE_MIN_DAYS  = 30;  // only flag "needs review" once this many days stale
+const QUEUE_STALE_COUNT     = 8;   // max cards to surface in the stale section
+const QUEUE_BIG_MOVE_PCT    = 20;  // |% change since report price| that counts as a big mover
+const QUEUE_NEAR_TARGET_PCT = 10;  // live price within this % of target = "approaching target"
+
 /* ---------------- in-memory view state ---------------- */
 const state = {
   entries: [],
-  activeSector: '__ALL__',
+  activeSector: '__QUEUE__', // default landing view is the Review Queue
   search: '',
   sort: 'recent',      // 'recent' | 'upside' | 'downside' | 'stale'
   ratingFilter: null,  // null (all) | 'BUY' | 'HOLD' | 'SELL' | 'AVOID' | 'N/A'
@@ -20,6 +28,7 @@ const state = {
 };
 
 const ALL = '__ALL__';
+const QUEUE = '__QUEUE__';
 
 /* ---------------- element handles ---------------- */
 const $ = sel => document.querySelector(sel);
@@ -32,6 +41,7 @@ const el = {
   emptyState: $('#emptyState'),
   mainHead: $('#mainHead'),
   timelineView: $('#timelineView'),
+  queueView: $('#queueView'),
   sectionTitle: $('#sectionTitle'),
   searchInput: $('#searchInput'),
   lastRefresh: $('#lastRefresh'),
@@ -79,18 +89,18 @@ function render() {
   if (state.timelineTicker && !state.entries.some(e => e.ticker === state.timelineTicker)) {
     state.timelineTicker = null;
   }
-  if (state.timelineTicker) {
-    el.mainHead.hidden = true;
-    el.cardGrid.hidden = true;
-    el.emptyState.hidden = true;
-    el.timelineView.hidden = false;
-    renderTimeline(state.timelineTicker);
-  } else {
-    el.mainHead.hidden = false;
-    el.cardGrid.hidden = false;
-    el.timelineView.hidden = true;
-    renderCards();
-  }
+  const mode = state.timelineTicker ? 'timeline'
+             : state.activeSector === QUEUE ? 'queue'
+             : 'grid';
+  el.mainHead.hidden     = mode !== 'grid';
+  el.cardGrid.hidden     = mode !== 'grid';
+  el.timelineView.hidden = mode !== 'timeline';
+  el.queueView.hidden    = mode !== 'queue';
+  if (mode !== 'grid') el.emptyState.hidden = true;
+
+  if (mode === 'timeline') renderTimeline(state.timelineTicker);
+  else if (mode === 'queue') renderQueue();
+  else renderCards();
 }
 
 function renderStats() {
@@ -103,6 +113,7 @@ function renderSectorNav() {
   const sectors = sectorsWithCounts();
   const frag = document.createDocumentFragment();
 
+  frag.appendChild(sectorButton(QUEUE, '⚡ Review Queue', computeQueue().distinct, false, 'queue'));
   frag.appendChild(sectorButton(ALL, 'All Research', state.entries.length, true));
 
   const div = document.createElement('div');
@@ -115,9 +126,12 @@ function renderSectorNav() {
   el.sectorNav.replaceChildren(frag);
 }
 
-function sectorButton(key, label, count, isAll) {
+/* cls: optional extra class (e.g. 'queue'). Real sectors (not All/Queue) get a rename pencil. */
+function sectorButton(key, label, count, isAll, cls) {
+  const isSector = !isAll && key !== QUEUE;
   const btn = document.createElement('div');
-  btn.className = 'sector-item' + (isAll ? ' all' : '') + (state.activeSector === key ? ' active' : '');
+  btn.className = 'sector-item' + (isAll ? ' all' : '') + (cls ? ' ' + cls : '')
+    + (state.activeSector === key ? ' active' : '');
   btn.setAttribute('role', 'button');
   btn.tabIndex = 0;
 
@@ -131,7 +145,7 @@ function sectorButton(key, label, count, isAll) {
 
   const right = document.createElement('span');
   right.className = 'sector-right';
-  if (!isAll) {
+  if (isSector) {
     const edit = document.createElement('button');
     edit.type = 'button';
     edit.className = 'sector-edit';
@@ -223,6 +237,116 @@ function renderCards() {
   const frag = document.createDocumentFragment();
   for (const t of tiles) frag.appendChild(card(t.rep, t));
   el.cardGrid.appendChild(frag);
+}
+
+/* ============================================================
+   Review Queue — the smart default landing view. Evaluates each
+   ticker-tile's representative (most recent report) against the
+   thresholds above. A tile can land in more than one section.
+   ============================================================ */
+function moveSinceReport(e) {           // % change report price -> live price
+  return pct(num(e.price), num(e.livePrice));
+}
+function distanceToTargetPct(e) {       // how far live price is from target, %
+  const tg = num(e.target), lp = num(e.livePrice);
+  if (tg == null || lp == null || tg === 0) return null;
+  return Math.abs(lp - tg) / Math.abs(tg) * 100;
+}
+
+function computeQueue() {
+  const tiles = allTiles();
+  const anyLive = state.entries.some(e => num(e.livePrice) != null);
+
+  const stale = tiles
+    .filter(t => {
+      const d = daysSinceReviewed(t.rep);
+      return d != null && d >= QUEUE_STALE_MIN_DAYS;   // needs a real date, and be old enough
+    })
+    .sort((a, b) => daysSinceReviewed(b.rep) - daysSinceReviewed(a.rep)) // most stale first
+    .slice(0, QUEUE_STALE_COUNT);
+
+  const movers = tiles
+    .filter(t => {
+      const m = moveSinceReport(t.rep);
+      return m != null && Math.abs(m) >= QUEUE_BIG_MOVE_PCT;
+    })
+    .sort((a, b) => Math.abs(moveSinceReport(b.rep)) - Math.abs(moveSinceReport(a.rep)));
+
+  const near = tiles
+    .filter(t => {
+      const d = distanceToTargetPct(t.rep);
+      return d != null && d <= QUEUE_NEAR_TARGET_PCT;
+    })
+    .sort((a, b) => distanceToTargetPct(a.rep) - distanceToTargetPct(b.rep)); // closest first
+
+  const distinct = new Set([...stale, ...movers, ...near].map(t => t.rep.id)).size;
+  return { stale, movers, near, anyLive, distinct };
+}
+
+function renderQueue() {
+  const q = computeQueue();
+  const view = el.queueView;
+  view.replaceChildren();
+
+  const head = document.createElement('div');
+  head.className = 'queue-head';
+  const h = document.createElement('h2');
+  h.className = 'queue-title';
+  h.textContent = '⚡ Review Queue';
+  const sub = document.createElement('p');
+  sub.className = 'queue-sub';
+  sub.textContent = 'What needs your attention — stale theses, big moves, and names near target.';
+  head.append(h, sub);
+  view.appendChild(head);
+
+  if (!q.stale.length && !q.movers.length && !q.near.length) {
+    const done = document.createElement('div');
+    done.className = 'caught-up';
+    done.innerHTML = '<div class="caught-up-mark">✓</div>'
+      + '<p class="caught-up-title">You’re caught up</p>'
+      + '<p class="caught-up-sub">Nothing needs review right now. Browse by sector from the sidebar, or refresh prices to surface movers.</p>';
+    view.appendChild(done);
+    return;
+  }
+
+  const liveHint = 'Refresh prices (⟳ top bar) to populate this section.';
+  view.appendChild(queueSection(
+    'Hasn’t Been Reviewed In A While', q.stale,
+    `Nothing older than ${QUEUE_STALE_MIN_DAYS} days.`));
+  view.appendChild(queueSection(
+    'Big Moves Since Report', q.movers,
+    q.anyLive ? `Nothing has moved ±${QUEUE_BIG_MOVE_PCT}% since its report.` : liveHint));
+  view.appendChild(queueSection(
+    'Approaching Target', q.near,
+    q.anyLive ? `Nothing within ${QUEUE_NEAR_TARGET_PCT}% of target.` : liveHint));
+}
+
+function queueSection(title, tiles, emptyHint) {
+  const sec = document.createElement('section');
+  sec.className = 'queue-section';
+
+  const h = document.createElement('h3');
+  h.className = 'queue-h';
+  const label = document.createElement('span');
+  label.textContent = title;
+  const badge = document.createElement('span');
+  badge.className = 'queue-count-badge';
+  badge.textContent = tiles.length;
+  h.append(label, badge);
+  sec.appendChild(h);
+
+  if (tiles.length) {
+    const grid = document.createElement('div');
+    grid.className = 'card-grid';
+    for (const t of tiles) grid.appendChild(card(t.rep, t));
+    sec.appendChild(grid);
+  } else {
+    const hint = document.createElement('p');
+    hint.className = 'queue-empty-hint';
+    hint.textContent = emptyHint;
+    sec.appendChild(hint);
+  }
+  return sec;
 }
 
 /* newest-dated first; undated sink to the bottom */

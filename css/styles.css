@@ -579,6 +579,54 @@ a:hover { text-decoration: underline; }
 .empty-title { font-family: var(--serif); font-size: 20px; color: var(--text-mute); margin: 0 0 6px; }
 .empty-sub { font-size: 13.5px; margin: 0; }
 
+/* ===================== REVIEW QUEUE ===================== */
+.sector-item.queue {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--gold-light);
+  background: linear-gradient(90deg, rgba(201,169,97,0.10), transparent);
+  margin-bottom: 2px;
+}
+.sector-item.queue:hover { background: linear-gradient(90deg, rgba(201,169,97,0.18), transparent); color: var(--gold-light); }
+.sector-item.queue.active {
+  background: linear-gradient(90deg, rgba(201,169,97,0.22), rgba(201,169,97,0.04));
+  border-color: var(--border);
+}
+.sector-item.queue .sector-count { background: rgba(201,169,97,0.16); color: var(--gold-light); }
+
+.queue-view { max-width: 1100px; }
+.queue-head { margin-bottom: 8px; }
+.queue-title { font-size: 24px; color: var(--text); letter-spacing: 0.4px; }
+.queue-sub { font-size: 13px; color: var(--text-dim); margin: 4px 0 0; }
+
+.queue-section { margin-top: 30px; }
+.queue-h {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--serif); font-size: 17px; color: var(--gold-light);
+  letter-spacing: 0.4px; margin: 0 0 14px;
+}
+.queue-h::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--border), transparent); }
+.queue-count-badge {
+  font-family: var(--mono); font-size: 12px; color: var(--gold-light);
+  background: rgba(201,169,97,0.14); border: 1px solid var(--border);
+  border-radius: 20px; padding: 1px 9px; min-width: 22px; text-align: center;
+}
+.queue-empty-hint { font-size: 13px; color: var(--text-dim); font-style: italic; margin: 0 0 4px; }
+
+.caught-up {
+  text-align: center; padding: 70px 20px; margin-top: 10px;
+  background: linear-gradient(180deg, var(--navy-2), var(--navy-1));
+  border: 1px solid var(--border-soft); border-radius: 14px;
+}
+.caught-up-mark {
+  width: 56px; height: 56px; margin: 0 auto 16px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; color: #12160a; background: var(--buy);
+  box-shadow: 0 0 24px rgba(62,207,122,0.35);
+}
+.caught-up-title { font-family: var(--serif); font-size: 22px; color: var(--text); margin: 0 0 6px; }
+.caught-up-sub { font-size: 13.5px; color: var(--text-dim); max-width: 440px; margin: 0 auto; line-height: 1.5; }
+
 /* ===================== MULTI-REPORT / TIMELINE ===================== */
 .card-ticker.clickable { cursor: pointer; }
 .card-ticker.clickable:hover { color: var(--gold-light); text-decoration: underline; text-underline-offset: 3px; }
