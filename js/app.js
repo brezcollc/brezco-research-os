@@ -5,7 +5,7 @@
    touching any of this rendering / event code.
    ============================================================ */
 
-import { dataStore } from './dataStore.js';
+import { dataStore, CANONICAL_SECTORS } from './dataStore.js';
 import { refreshPrices } from './prices.js';
 
 /* ============================================================
@@ -833,14 +833,32 @@ function existingSectors() {
   return [...set].sort((a, b) => a.localeCompare(b));
 }
 
-/* Always builds a dropdown of every current sector plus a distinct
-   "+ New sector…" option last, and selects a REAL sector by default. The
-   manual-entry field only appears when the user explicitly picks New — never
-   as the default, and never because a stored value failed to match. */
+/* The finalized set of sectors offered in the dropdown: the canonical real
+   sectors, plus any custom sector already present in the data (so editing an
+   entry never silently loses its sector). No vague catch-all is ever offered. */
+function sectorChoices() {
+  const set = new Set(CANONICAL_SECTORS);
+  for (const e of state.entries) {
+    const s = (e.sector || '').trim();
+    if (s) set.add(s);
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+/* Builds the dropdown from the finalized sector list + "+ New sector". New
+   entries start on a "— Select a sector —" placeholder so a sector must be
+   chosen explicitly — there is no default/accidental catch-all. Editing an
+   entry (or a pre-filled follow-up) pre-selects its real sector. */
 function populateSectorSelect(selected) {
   const sel = $('#f_sectorSelect');
-  const sectors = existingSectors();
+  const sectors = sectorChoices();
   sel.replaceChildren();
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '— Select a sector —';
+  sel.appendChild(placeholder);
+
   for (const s of sectors) {
     const opt = document.createElement('option');
     opt.value = s; opt.textContent = s;
@@ -852,13 +870,7 @@ function populateSectorSelect(selected) {
   sel.appendChild(nw);
 
   const wanted = (selected || '').trim();
-  if (wanted && sectors.includes(wanted)) {
-    sel.value = wanted;        // editing: the entry's own sector
-  } else if (sectors.length) {
-    sel.value = sectors[0];    // default to a real sector, never manual entry
-  } else {
-    sel.value = '__NEW__';     // only when there are genuinely no sectors yet
-  }
+  sel.value = (wanted && sectors.includes(wanted)) ? wanted : '';  // else the placeholder
 }
 
 /* entry = the record to edit (null to add). prefill = {ticker,company,sector}

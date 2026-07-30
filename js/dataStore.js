@@ -21,6 +21,7 @@ const KEYS = {
   entries:  'brezco.research.entries.v1',
   settings: 'brezco.research.settings.v1',
   seeded:   'brezco.research.seeded.v1',
+  cddMigrated: 'brezco.research.migration.cdd.v1',
 };
 
 function uid() {
@@ -62,10 +63,20 @@ export const CANONICAL_SECTORS = [
   'Defense & Security',
   'Fintech & Consumer',
   'Small-Cap Discovery',
-  'Company Deep Dives',
+  'Media & Entertainment',
   'Macro & Education',
 ];
 export const REVIEW_SECTOR = 'Needs Sector Review';
+
+/* One-time reclassification: "Company Deep Dives" was a vague catch-all and is
+   being retired. Known tickers move to their real industry; anything else in
+   that bucket is surfaced for review rather than silently kept or guessed. */
+const RETIRED_SECTOR = 'Company Deep Dives';
+const CDD_REMAP = {
+  PLTR: 'Defense & Security',
+  FN:   'AI Infra & Semis',
+  NFLX: 'Media & Entertainment',
+};
 
 /* Normalized comparison key: lowercase, "and"->"&", strip everything but
    alphanumerics and "&". "AI Infra and Semis" === "ai infra & semis". */
@@ -137,10 +148,31 @@ export const dataStore = {
       await backend.writeAll(seeded);
       localStorage.setItem(KEYS.seeded, '1');
     }
+    // One-time: retire the "Company Deep Dives" catch-all in existing browser data.
+    await this.migrateCompanyDeepDives();
     // One-time-per-load sector cleanup: folds duplicate spellings to
     // canonical names and routes blank sectors to the review bucket.
     // Applies to whatever is in this browser, including data added earlier.
     return this.runSectorHygiene();
+  },
+
+  /* Retire the "Company Deep Dives" sector across existing browser data.
+     Known tickers -> real industry (CDD_REMAP); any other entry still tagged
+     with it -> the review bucket (never silently kept). Runs once per browser. */
+  async migrateCompanyDeepDives() {
+    if (localStorage.getItem(KEYS.cddMigrated)) return { migrated: [] };
+    const all = await backend.readAll();
+    const migrated = [];
+    for (const e of all) {
+      if ((e.sector || '').trim() === RETIRED_SECTOR) {
+        const to = CDD_REMAP[e.ticker] || REVIEW_SECTOR;
+        migrated.push({ ticker: e.ticker, to });
+        e.sector = to;
+      }
+    }
+    if (migrated.length) await backend.writeAll(all);
+    localStorage.setItem(KEYS.cddMigrated, '1');
+    return { migrated };
   },
 
   /* Normalize every entry's sector in place; write back only if something
