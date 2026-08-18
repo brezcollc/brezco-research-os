@@ -25,6 +25,7 @@ const state = {
   ratingFilter: null,  // null (all) | 'BUY' | 'HOLD' | 'SELL' | 'AVOID' | 'N/A'
   statusFilter: null,  // null (all) | 'Holding' | 'Watching' | 'Passed' | 'Unset'
   timelineTicker: null, // when set, main panel shows that ticker's thesis timeline
+  priceRefreshDone: false, // has a live-price refresh run in this browser yet
 };
 
 const ALL = '__ALL__';
@@ -53,6 +54,7 @@ const el = {
    ============================================================ */
 (async function boot() {
   state.entries = await dataStore.init();
+  state.priceRefreshDone = !!(await dataStore.getSetting('lastRefresh'));
   wireStaticEvents();
   populateSectorSelect();
   render();
@@ -583,6 +585,17 @@ function card(e, tile) {
       s.textContent = `${fmtPct(since)} since report`;
       row.appendChild(s);
     }
+    node.appendChild(row);
+  } else if (!isMacro && state.priceRefreshDone) {
+    /* refresh has run but this ticker got no quote — surface it instead of a blank */
+    const row = document.createElement('div');
+    row.className = 'live-row live-missing';
+    const dot = document.createElement('span');
+    dot.className = 'live-dot missing';
+    const label = document.createElement('span');
+    label.textContent = 'No live quote';
+    label.title = 'Finnhub returned no price for this symbol on the last refresh (free-tier coverage gap).';
+    row.append(dot, label);
     node.appendChild(row);
   }
 
@@ -1143,6 +1156,7 @@ async function doRefresh() {
   });
 
   state.entries = await dataStore.getAll();
+  state.priceRefreshDone = true;
   await dataStore.setSetting('lastRefresh', new Date().toISOString());
   render();
   showLastRefresh();
@@ -1150,12 +1164,18 @@ async function doRefresh() {
   btn.disabled = false;
   btn.innerHTML = original;
 
-  if (result.failed === 0) {
-    toast(`Refreshed ${result.succeeded} ticker${result.succeeded === 1 ? '' : 's'}.`, 'ok');
-  } else {
-    const names = result.failures.slice(0, 4).map(f => f.ticker).join(', ');
-    const more = result.failures.length > 4 ? '…' : '';
-    toast(`${result.succeeded} updated, ${result.failed} failed (${names}${more}).`, result.succeeded ? '' : 'err');
+  toast(`Refreshed ${result.succeeded} ticker${result.succeeded === 1 ? '' : 's'}.`,
+        result.succeeded ? 'ok' : '');
+
+  // Break out the failures by cause so it's clear WHY a price is missing.
+  const nq = result.noQuote || [];
+  const other = result.failures.filter(f => f.error !== 'no quote').map(f => f.ticker);
+  const list = arr => arr.slice(0, 5).join(', ') + (arr.length > 5 ? '…' : '');
+  if (nq.length) {
+    toast(`No Finnhub quote for ${nq.length}: ${list(nq)} — free-tier gap, not a bad symbol. Cards show “No live quote”.`, 'err');
+  }
+  if (other.length) {
+    toast(`${other.length} still failed after retry: ${list(other)} (rate limit / network).`, 'err');
   }
 }
 

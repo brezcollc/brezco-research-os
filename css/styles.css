@@ -439,6 +439,10 @@ a:hover { text-decoration: underline; }
 .live-since.up { color: var(--up); }
 .live-since.down { color: var(--down); }
 
+/* "No live quote" — refresh ran but Finnhub returned nothing for this symbol */
+.live-row.live-missing { color: var(--stale-mid); }
+.live-dot.missing { background: var(--stale-mid); box-shadow: none; opacity: 0.85; }
+
 .card-foot {
   display: flex;
   align-items: center;
