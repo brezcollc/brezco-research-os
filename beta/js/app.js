@@ -1214,10 +1214,10 @@ async function doRefresh() {
   const other = result.failures.filter(f => f.error !== 'no quote').map(f => f.ticker);
   const list = arr => arr.slice(0, 5).join(', ') + (arr.length > 5 ? '…' : '');
   if (nq.length) {
-    toast(`No Finnhub quote for ${nq.length}: ${list(nq)} — free-tier gap, not a bad symbol. Cards show “No live quote”.`, 'err');
+    toast(`No Finnhub quote for ${nq.length}: ${list(nq)} — free-tier gap, not a bad symbol. Cards show “No live quote”.`, 'err', true);
   }
   if (other.length) {
-    toast(`${other.length} still failed after retry: ${list(other)} (rate limit / network).`, 'err');
+    toast(`${other.length} still failed after retry: ${list(other)} (rate limit / network).`, 'err', true);
   }
 }
 
@@ -1237,15 +1237,18 @@ function closeModal(m) { m.hidden = true; document.body.style.overflow = ''; }
 /* ============================================================
    Toast
    ============================================================ */
-function toast(msg, kind = '') {
+function toast(msg, kind = '', sticky = false) {
   const t = document.createElement('div');
   t.className = 'toast ' + kind;
   t.textContent = msg;
+  t.title = 'Click to dismiss';
+  const remove = () => { t.classList.add('fade'); setTimeout(() => t.remove(), 300); };
+  t.addEventListener('click', remove);          // always click-to-dismiss
   el.toastWrap.appendChild(t);
-  setTimeout(() => {
-    t.classList.add('fade');
-    setTimeout(() => t.remove(), 300);
-  }, 3200);
+  if (!sticky) {
+    // errors linger much longer so they can actually be read
+    setTimeout(remove, kind === 'err' ? 11000 : 3600);
+  }
 }
 
 /* ============================================================
