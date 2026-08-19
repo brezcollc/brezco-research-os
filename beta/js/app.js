@@ -1179,51 +1179,38 @@ async function exportData() {
   URL.revokeObjectURL(a.href);
 }
 
+/* Prices come from the automated Robinhood feed writing to your account.
+   A browser can't call Robinhood directly, so this button just pulls the
+   latest prices the feed has written — it never re-introduces Finnhub gaps. */
 async function doRefresh() {
-  const key = (await dataStore.getSetting('finnhubKey')) || '';
-  if (!key) {
-    toast('Add a Finnhub API key to refresh prices.', 'err');
-    openSettingsModal();
-    return;
-  }
-
-  const tickers = state.entries.map(e => e.ticker);
   const btn = $('#refreshBtn');
   const original = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '<span class="btn-ico spin">⟳</span> Refreshing…';
-
-  const result = await refreshPrices(tickers, key, async (ticker, price, asOf) => {
-    await dataStore.applyLivePrice(ticker, price, asOf);
-  });
+  btn.innerHTML = '<span class="btn-ico spin">⟳</span> Loading…';
 
   state.entries = await dataStore.getAll();
   state.priceRefreshDone = true;
-  await dataStore.setSetting('lastRefresh', new Date().toISOString());
   render();
   showLastRefresh();
 
   btn.disabled = false;
   btn.innerHTML = original;
 
-  toast(`Refreshed ${result.succeeded} ticker${result.succeeded === 1 ? '' : 's'}.`,
-        result.succeeded ? 'ok' : '');
-
-  // Break out the failures by cause so it's clear WHY a price is missing.
-  const nq = result.noQuote || [];
-  const other = result.failures.filter(f => f.error !== 'no quote').map(f => f.ticker);
-  const list = arr => arr.slice(0, 5).join(', ') + (arr.length > 5 ? '…' : '');
-  if (nq.length) {
-    toast(`No Finnhub quote for ${nq.length}: ${list(nq)} — free-tier gap, not a bad symbol. Cards show “No live quote”.`, 'err', true);
-  }
-  if (other.length) {
-    toast(`${other.length} still failed after retry: ${list(other)} (rate limit / network).`, 'err', true);
+  const missing = [...new Set(state.entries
+    .filter(e => e.ticker !== 'MACRO' && !e.livePrice).map(e => e.ticker))];
+  if (missing.length) {
+    const list = missing.slice(0, 6).join(', ') + (missing.length > 6 ? '…' : '');
+    toast(`Loaded latest prices. No quote for ${missing.length}: ${list} (delisted / not trading).`, 'err', true);
+  } else {
+    toast('Loaded latest prices from your feed.', 'ok');
   }
 }
 
-async function showLastRefresh() {
-  const iso = await dataStore.getSetting('lastRefresh');
-  if (!iso) { el.lastRefresh.textContent = 'Prices not yet refreshed'; return; }
+/* "Prices as of" = the newest liveAsOf stamp across entries (set by the feed). */
+function showLastRefresh() {
+  const stamps = state.entries.map(e => e.liveAsOf).filter(Boolean).sort();
+  const iso = stamps[stamps.length - 1];
+  if (!iso) { el.lastRefresh.textContent = 'Prices not yet updated'; return; }
   const d = new Date(iso);
   el.lastRefresh.textContent = 'Prices as of ' + d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
