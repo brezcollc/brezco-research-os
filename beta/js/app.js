@@ -1200,7 +1200,7 @@ async function doRefresh() {
     .filter(e => e.ticker !== 'MACRO' && !e.livePrice).map(e => e.ticker))];
   if (missing.length) {
     const list = missing.slice(0, 6).join(', ') + (missing.length > 6 ? '…' : '');
-    toast(`Loaded latest prices. No quote for ${missing.length}: ${list} (delisted / not trading).`, 'err', true);
+    toast(`Loaded latest prices. Not priced yet for ${missing.length}: ${list}. Newly added tickers get a price on the next feed update (or ask Claude to update now).`, 'err', true);
   } else {
     toast('Loaded latest prices from your feed.', 'ok');
   }
