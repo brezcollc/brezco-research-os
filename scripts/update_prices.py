@@ -31,11 +31,7 @@ def yahoo_price(ticker):
     d = json.loads(urllib.request.urlopen(req, timeout=15).read())
     return d["chart"]["result"][0]["meta"].get("regularMarketPrice")
 
-def main():
-    if len(sys.argv) < 2:
-        print("usage: update_prices.py <secret>"); sys.exit(1)
-    secret = sys.argv[1]
-    tickers = json.loads(rpc("get_tickers", {"p_secret": secret}))
+def fetch_prices(tickers):
     prices, missing = [], []
     for t in tickers:
         try:
@@ -47,6 +43,18 @@ def main():
         except Exception:
             missing.append(t)
         time.sleep(0.2)  # be gentle
+    return prices, missing
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: update_prices.py <secret>"); sys.exit(1)
+    secret = sys.argv[1]
+    tickers = json.loads(rpc("get_tickers", {"p_secret": secret}))
+    prices, missing = fetch_prices(tickers)
+    if missing:                                   # retry transient misses once
+        time.sleep(3)
+        retry, missing = fetch_prices(missing)
+        prices += retry
     updated = rpc("set_live_prices", {"p_secret": secret, "p_prices": prices})
     print(f"tickers={len(tickers)} priced={len(prices)} rows_updated={updated} missing={missing}")
 
