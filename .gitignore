@@ -8,3 +8,6 @@
 # Logs / temp
 *.log
 node_modules/
+
+# Local Claude Code preview config
+.claude/

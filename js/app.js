@@ -203,7 +203,8 @@ function visibleTiles() {
     if (state.statusFilter && (rep.status || 'Unset') !== state.statusFilter) return false;
     if (!q) return true;
     return t.entries.some(e =>
-      (e.ticker + ' ' + e.company + ' ' + e.notes + ' ' + e.sector).toLowerCase().includes(q));
+      (e.ticker + ' ' + e.company + ' ' + e.notes + ' ' + e.sector + ' ' +
+       ((e.thesis && e.thesis.one_liner) || '')).toLowerCase().includes(q));
   });
 }
 
@@ -534,6 +535,19 @@ function card(e, tile) {
     node.appendChild(notes);
   }
 
+  /* --- structured-thesis marker: this report carries a v2 thesis; the full
+     breakdown lives in the ticker's timeline (click the symbol). --- */
+  if (e.thesis) {
+    const chip = document.createElement('div');
+    chip.className = 'card-thesis-chip';
+    const parts = ['📋 Structured thesis'];
+    if (e.thesis.call_type) parts.push(e.thesis.call_type);
+    if (e.thesis.conviction != null) parts.push(`conviction ${e.thesis.conviction}/5`);
+    chip.textContent = parts.join(' · ');
+    chip.title = 'Open the timeline (click the ticker) for the full thesis';
+    node.appendChild(chip);
+  }
+
   /* --- price row: report price -> target (upside) --- */
   const p = num(e.price), t = num(e.target);
   if (p != null || t != null) {
@@ -734,6 +748,159 @@ function renderTimeline(ticker) {
   view.appendChild(list);
 }
 
+/* ============================================================
+   Structured v2 thesis panel — collapsible, read-only.
+   Renders the `thesis` object produced by the thesis-aware earnings
+   prompt: one-liner, conviction, the gradeable prediction, assumptions
+   with status, catalysts, watch-list, and thesis breakers.
+   ============================================================ */
+const ASSUMPTION_LABEL = { intact: 'Intact', watch: 'Watch', broken: 'Broken' };
+
+function thesisPanel(t) {
+  const box = document.createElement('details');
+  box.className = 'tl-thesis';
+  // Don't let clicks inside the panel bubble up to the row's "edit" handler.
+  box.addEventListener('click', ev => ev.stopPropagation());
+
+  /* summary line: call type + conviction dots */
+  const sum = document.createElement('summary');
+  sum.className = 'th-summary';
+  const tag = document.createElement('span');
+  tag.className = 'th-tag';
+  tag.textContent = '📋 Structured thesis';
+  sum.appendChild(tag);
+  if (t.call_type) {
+    const ct = document.createElement('span');
+    ct.className = 'th-calltype th-' + t.call_type.toLowerCase();
+    ct.textContent = t.call_type;
+    sum.appendChild(ct);
+  }
+  if (t.conviction != null) {
+    const conv = document.createElement('span');
+    conv.className = 'th-conviction';
+    conv.title = `Conviction ${t.conviction}/5`;
+    conv.textContent = '●'.repeat(t.conviction) + '○'.repeat(5 - t.conviction);
+    sum.appendChild(conv);
+  }
+  box.appendChild(sum);
+
+  const body = document.createElement('div');
+  body.className = 'th-body';
+
+  if (t.one_liner) {
+    const ol = document.createElement('p');
+    ol.className = 'th-oneliner';
+    ol.textContent = t.one_liner;
+    body.appendChild(ol);
+  }
+
+  /* the gradeable prediction — the point of v2, so it leads */
+  if (t.prediction && t.prediction.statement) {
+    const pred = document.createElement('div');
+    pred.className = 'th-prediction';
+    const label = document.createElement('div');
+    label.className = 'th-pred-label';
+    label.textContent = t.prediction.by
+      ? `Gradeable prediction · by ${t.prediction.by}`
+      : 'Gradeable prediction';
+    const stmt = document.createElement('div');
+    stmt.className = 'th-pred-stmt';
+    stmt.textContent = t.prediction.statement;
+    pred.append(label, stmt);
+    body.appendChild(pred);
+  }
+
+  if (t.assumptions && t.assumptions.length) {
+    body.appendChild(thSectionTitle('Assumptions'));
+    const ul = document.createElement('ul');
+    ul.className = 'th-assumptions';
+    for (const a of t.assumptions) {
+      const li = document.createElement('li');
+      li.className = 'th-assumption';
+      const head = document.createElement('div');
+      head.className = 'th-assump-head';
+      const st = document.createElement('span');
+      st.className = 'th-status th-status-' + a.status;
+      st.textContent = ASSUMPTION_LABEL[a.status] || a.status;
+      const claim = document.createElement('span');
+      claim.className = 'th-claim';
+      claim.textContent = a.claim;
+      head.append(st, claim);
+      li.appendChild(head);
+      const meta = [];
+      if (a.confirm_if) meta.push(['Confirm if', a.confirm_if]);
+      if (a.break_if) meta.push(['Break if', a.break_if]);
+      for (const [k, v] of meta) {
+        const d = document.createElement('div');
+        d.className = 'th-assump-meta';
+        const b = document.createElement('strong');
+        b.textContent = k + ': ';
+        d.append(b, document.createTextNode(v));
+        li.appendChild(d);
+      }
+      ul.appendChild(li);
+    }
+    body.appendChild(ul);
+  }
+
+  if (t.catalysts && t.catalysts.length) {
+    body.appendChild(thSectionTitle('Catalysts'));
+    const ul = document.createElement('ul');
+    ul.className = 'th-list th-catalysts';
+    for (const c of t.catalysts) {
+      const li = document.createElement('li');
+      const ev = document.createElement('strong');
+      ev.textContent = c.event;
+      li.appendChild(ev);
+      if (c.date) li.append(document.createTextNode(` · ${c.date}`));
+      if (c.matters_because) {
+        const why = document.createElement('div');
+        why.className = 'th-sub';
+        why.textContent = c.matters_because;
+        li.appendChild(why);
+      }
+      ul.appendChild(li);
+    }
+    body.appendChild(ul);
+  }
+
+  if (t.watch_next_quarter && t.watch_next_quarter.length) {
+    body.appendChild(thSectionTitle('Watch next quarter'));
+    body.appendChild(thBulletList(t.watch_next_quarter, 'th-watch'));
+  }
+
+  if (t.thesis_breakers && t.thesis_breakers.length) {
+    body.appendChild(thSectionTitle('Thesis breakers'));
+    body.appendChild(thBulletList(t.thesis_breakers, 'th-breakers'));
+  }
+
+  if (t.changes_since_last && t.changes_since_last.length) {
+    body.appendChild(thSectionTitle('Changes since last'));
+    body.appendChild(thBulletList(t.changes_since_last, 'th-changes'));
+  }
+
+  box.appendChild(body);
+  return box;
+}
+
+function thSectionTitle(text) {
+  const h = document.createElement('div');
+  h.className = 'th-section';
+  h.textContent = text;
+  return h;
+}
+
+function thBulletList(items, cls) {
+  const ul = document.createElement('ul');
+  ul.className = 'th-list ' + (cls || '');
+  for (const it of items) {
+    const li = document.createElement('li');
+    li.textContent = it;
+    ul.appendChild(li);
+  }
+  return ul;
+}
+
 function timelineEntry(e, isCurrent) {
   const row = document.createElement('div');
   row.className = `tl-entry rate-${ratingClass(e.rating)}` + (isCurrent ? ' current' : '');
@@ -787,6 +954,8 @@ function timelineEntry(e, isCurrent) {
     notes.textContent = e.notes;
     row.appendChild(notes);
   }
+
+  if (e.thesis) row.appendChild(thesisPanel(e.thesis));
 
   const foot = document.createElement('div');
   foot.className = 'tl-entry-foot';
@@ -973,6 +1142,9 @@ async function saveEntry(ev) {
       entry.livePrice = existing.livePrice;
       entry.liveAsOf = existing.liveAsOf;
       entry.lastReviewed = existing.lastReviewed;
+      // The structured v2 thesis isn't editable in this modal — carry it
+      // through so a flat edit (e.g. fixing notes) never discards it.
+      if (existing.thesis) entry.thesis = existing.thesis;
     }
   }
 

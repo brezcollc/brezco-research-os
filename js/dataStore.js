@@ -31,7 +31,7 @@ function uid() {
 /* Normalize an arbitrary object into a valid entry shape. */
 function normalize(raw) {
   const e = raw || {};
-  return {
+  const out = {
     id:        e.id || uid(),
     ticker:    String(e.ticker || '').trim().toUpperCase(),
     company:   String(e.company || '').trim(),
@@ -49,6 +49,60 @@ function normalize(raw) {
     // (no migration write is forced for existing entries / seed data).
     lastReviewed: String(e.lastReviewed || '').trim(),
   };
+  // v2 structured thesis (from the thesis-aware earnings prompt). Optional —
+  // the key is only attached when a real thesis is present, so pre-v2 entries
+  // and flat imports stay exactly as they were.
+  const thesis = normalizeThesis(e.thesis);
+  if (thesis) out.thesis = thesis;
+  return out;
+}
+
+/* ---------------- v2 thesis normalization ----------------
+   Coerce the `thesis` object from the earnings prompt's JSON into a clean,
+   render-safe shape. Every field is defended: missing arrays become [],
+   missing strings become '', conviction is clamped 1-5, assumption status is
+   folded to intact|watch|broken. Returns undefined when there's nothing
+   meaningful to store, so `normalize()` won't attach an empty husk. */
+const ASSUMPTION_STATUSES = ['intact', 'watch', 'broken'];
+
+function normalizeThesis(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const str = v => (v == null ? '' : String(v).trim());
+  const arr = v => (Array.isArray(v) ? v : []);
+
+  const conv = Number(raw.conviction);
+  const t = {
+    one_liner: str(raw.one_liner),
+    call_type: /trade/i.test(str(raw.call_type)) ? 'Trade'
+             : /invest/i.test(str(raw.call_type)) ? 'Invest' : '',
+    conviction: Number.isFinite(conv) ? Math.min(5, Math.max(1, Math.round(conv))) : null,
+    assumptions: arr(raw.assumptions).map(a => ({
+      claim:          str(a && a.claim),
+      why_it_matters: str(a && a.why_it_matters),
+      confirm_if:     str(a && a.confirm_if),
+      break_if:       str(a && a.break_if),
+      status: ASSUMPTION_STATUSES.includes(str(a && a.status).toLowerCase())
+        ? str(a.status).toLowerCase() : 'watch',
+    })).filter(a => a.claim),
+    thesis_breakers: arr(raw.thesis_breakers).map(str).filter(Boolean),
+    catalysts: arr(raw.catalysts).map(c => ({
+      event:           str(c && c.event),
+      date:            str(c && c.date),
+      matters_because: str(c && c.matters_because),
+    })).filter(c => c.event),
+    watch_next_quarter: arr(raw.watch_next_quarter).map(str).filter(Boolean),
+    prediction: {
+      statement: str(raw.prediction && raw.prediction.statement),
+      by:        str(raw.prediction && raw.prediction.by),
+    },
+    changes_since_last: arr(raw.changes_since_last).map(str).filter(Boolean),
+  };
+
+  // Consider the thesis "present" only if it carries real content.
+  const hasContent = t.one_liner || t.call_type || t.conviction != null ||
+    t.assumptions.length || t.thesis_breakers.length || t.catalysts.length ||
+    t.watch_next_quarter.length || t.prediction.statement;
+  return hasContent ? t : undefined;
 }
 
 /* ---------------- sector hygiene ----------------
