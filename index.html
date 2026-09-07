@@ -248,6 +248,10 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js"></script>
+  <!-- Cache-busting: GitHub Pages serves JS with a 10-min cache, so browsers
+       run stale code after a deploy. Bump ?v= on EVERY deploy (keep it in sync
+       with the ?v= on the internal imports in js/app.js and js/dataStore.js).
+       A new query = a new URL the browser cannot serve from cache. -->
+  <script type="module" src="js/app.js?v=20260907c"></script>
 </body>
 </html>

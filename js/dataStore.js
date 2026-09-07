@@ -15,7 +15,8 @@
    set `const backend = apiBackend;`. Nothing in app.js changes.
    ============================================================ */
 
-import { SEED_ENTRIES } from './seed.js';
+// NOTE: ?v= must match the version in index.html and app.js — bump all on deploy.
+import { SEED_ENTRIES } from './seed.js?v=20260907c';
 
 const KEYS = {
   entries:  'brezco.research.entries.v1',

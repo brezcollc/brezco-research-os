@@ -5,8 +5,9 @@
    touching any of this rendering / event code.
    ============================================================ */
 
-import { dataStore, CANONICAL_SECTORS } from './dataStore.js';
-import { refreshPrices } from './prices.js';
+// NOTE: ?v= must match the version in index.html and dataStore.js — bump all on deploy.
+import { dataStore, CANONICAL_SECTORS } from './dataStore.js?v=20260907c';
+import { refreshPrices } from './prices.js?v=20260907c';
 
 /* ============================================================
    Review Queue thresholds — tweak these freely.
