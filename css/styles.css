@@ -883,8 +883,16 @@ a:hover { text-decoration: underline; }
   background: rgba(201, 169, 97, 0.10);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 3px 9px;
+  padding: 4px 11px;
   margin: 0 0 11px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.card-thesis-chip:hover {
+  background: rgba(201, 169, 97, 0.18);
+  border-color: var(--gold-dark);
+  color: var(--gold-light);
 }
 
 /* collapsible panel inside a timeline entry */

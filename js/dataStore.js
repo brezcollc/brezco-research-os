@@ -16,7 +16,7 @@
    ============================================================ */
 
 // NOTE: ?v= must match the version in index.html and app.js — bump all on deploy.
-import { SEED_ENTRIES } from './seed.js?v=20260907c';
+import { SEED_ENTRIES } from './seed.js?v=20260907d';
 
 const KEYS = {
   entries:  'brezco.research.entries.v1',

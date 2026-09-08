@@ -6,8 +6,8 @@
    ============================================================ */
 
 // NOTE: ?v= must match the version in index.html and dataStore.js — bump all on deploy.
-import { dataStore, CANONICAL_SECTORS } from './dataStore.js?v=20260907c';
-import { refreshPrices } from './prices.js?v=20260907c';
+import { dataStore, CANONICAL_SECTORS } from './dataStore.js?v=20260907d';
+import { refreshPrices } from './prices.js?v=20260907d';
 
 /* ============================================================
    Review Queue thresholds — tweak these freely.
@@ -539,13 +539,17 @@ function card(e, tile) {
   /* --- structured-thesis marker: this report carries a v2 thesis; the full
      breakdown lives in the ticker's timeline (click the symbol). --- */
   if (e.thesis) {
-    const chip = document.createElement('div');
+    const chip = document.createElement('button');
+    chip.type = 'button';
     chip.className = 'card-thesis-chip';
-    const parts = ['📋 Structured thesis'];
+    const parts = ['📋 View structured thesis'];
     if (e.thesis.call_type) parts.push(e.thesis.call_type);
     if (e.thesis.conviction != null) parts.push(`conviction ${e.thesis.conviction}/5`);
     chip.textContent = parts.join(' · ');
-    chip.title = 'Open the timeline (click the ticker) for the full thesis';
+    chip.title = 'Open the full thesis in this ticker’s timeline';
+    // Clicking the chip goes straight to the timeline where the panel lives,
+    // so there's no need to know the ticker-symbol-vs-tile click distinction.
+    chip.addEventListener('click', ev => { ev.stopPropagation(); openTimeline(e.ticker); });
     node.appendChild(chip);
   }
 
@@ -757,9 +761,12 @@ function renderTimeline(ticker) {
    ============================================================ */
 const ASSUMPTION_LABEL = { intact: 'Intact', watch: 'Watch', broken: 'Broken' };
 
-function thesisPanel(t) {
+function thesisPanel(t, startOpen) {
   const box = document.createElement('details');
   box.className = 'tl-thesis';
+  // Expanded by default on the current report so the thesis is visible without
+  // an extra click (older reports collapse to keep the timeline tidy).
+  if (startOpen) box.open = true;
   // Don't let clicks inside the panel bubble up to the row's "edit" handler.
   box.addEventListener('click', ev => ev.stopPropagation());
 
@@ -956,7 +963,7 @@ function timelineEntry(e, isCurrent) {
     row.appendChild(notes);
   }
 
-  if (e.thesis) row.appendChild(thesisPanel(e.thesis));
+  if (e.thesis) row.appendChild(thesisPanel(e.thesis, isCurrent));
 
   const foot = document.createElement('div');
   foot.className = 'tl-entry-foot';
