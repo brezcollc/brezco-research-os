@@ -197,7 +197,7 @@
         <button class="modal-close" data-close aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
-        <p class="modal-hint">Paste a single JSON object or an array of objects. <code>ticker</code>, <code>company</code>, and <code>sector</code> are required; everything else is optional.</p>
+        <p class="modal-hint">Paste a single JSON object or an array of objects. <code>ticker</code>, <code>company</code>, and <code>sector</code> are required; everything else is optional. A structured <code>thesis</code> object (assumptions, catalysts, gradeable prediction) is preserved and shown in the ticker's timeline.</p>
         <textarea id="importText" class="import-area" rows="12" placeholder='[{"ticker":"NVDA","company":"NVIDIA","sector":"AI Infra & Semis","rating":"BUY","target":"200","notes":"…"}]'></textarea>
         <div class="import-error" id="importError" hidden></div>
         <div class="modal-foot">
@@ -267,6 +267,9 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js"></script>
+  <!-- Cache-busting: bump ?v= on EVERY deploy (keep in sync with the ?v= on the
+       internal imports in js/app.js and js/dataStore.js). A new query = a new
+       URL the browser cannot serve from its 10-minute GitHub Pages cache. -->
+  <script type="module" src="js/app.js?v=20260907d"></script>
 </body>
 </html>

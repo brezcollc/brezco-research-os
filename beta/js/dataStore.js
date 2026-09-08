@@ -15,8 +15,8 @@
    set `const backend = apiBackend;`. Nothing in app.js changes.
    ============================================================ */
 
-import { SEED_ENTRIES } from './seed.js';
-import { supabase } from './supabase.js';
+import { SEED_ENTRIES } from './seed.js?v=20260907d';
+import { supabase } from './supabase.js?v=20260907d';
 
 const KEYS = {
   entries:  'brezco.research.entries.v1',
@@ -35,7 +35,7 @@ function uid() {
 /* Normalize an arbitrary object into a valid entry shape. */
 function normalize(raw) {
   const e = raw || {};
-  return {
+  const out = {
     id:        e.id || uid(),
     ticker:    String(e.ticker || '').trim().toUpperCase(),
     company:   String(e.company || '').trim(),
@@ -53,6 +53,59 @@ function normalize(raw) {
     // (no migration write is forced for existing entries / seed data).
     lastReviewed: String(e.lastReviewed || '').trim(),
   };
+  // v2 structured thesis (from the thesis-aware earnings prompt). Optional —
+  // the key is only attached when a real thesis is present, so pre-v2 entries
+  // and flat imports stay exactly as they were.
+  const thesis = normalizeThesis(e.thesis);
+  if (thesis) out.thesis = thesis;
+  return out;
+}
+
+/* ---------------- v2 thesis normalization ----------------
+   Coerce the `thesis` object from the earnings prompt's JSON into a clean,
+   render-safe shape. Every field is defended: missing arrays become [],
+   missing strings become '', conviction is clamped 1-5, assumption status is
+   folded to intact|watch|broken. Returns undefined when there's nothing
+   meaningful to store, so `normalize()` won't attach an empty husk. */
+const ASSUMPTION_STATUSES = ['intact', 'watch', 'broken'];
+
+function normalizeThesis(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const str = v => (v == null ? '' : String(v).trim());
+  const arr = v => (Array.isArray(v) ? v : []);
+
+  const conv = Number(raw.conviction);
+  const t = {
+    one_liner: str(raw.one_liner),
+    call_type: /trade/i.test(str(raw.call_type)) ? 'Trade'
+             : /invest/i.test(str(raw.call_type)) ? 'Invest' : '',
+    conviction: Number.isFinite(conv) ? Math.min(5, Math.max(1, Math.round(conv))) : null,
+    assumptions: arr(raw.assumptions).map(a => ({
+      claim:          str(a && a.claim),
+      why_it_matters: str(a && a.why_it_matters),
+      confirm_if:     str(a && a.confirm_if),
+      break_if:       str(a && a.break_if),
+      status: ASSUMPTION_STATUSES.includes(str(a && a.status).toLowerCase())
+        ? str(a.status).toLowerCase() : 'watch',
+    })).filter(a => a.claim),
+    thesis_breakers: arr(raw.thesis_breakers).map(str).filter(Boolean),
+    catalysts: arr(raw.catalysts).map(c => ({
+      event:           str(c && c.event),
+      date:            str(c && c.date),
+      matters_because: str(c && c.matters_because),
+    })).filter(c => c.event),
+    watch_next_quarter: arr(raw.watch_next_quarter).map(str).filter(Boolean),
+    prediction: {
+      statement: str(raw.prediction && raw.prediction.statement),
+      by:        str(raw.prediction && raw.prediction.by),
+    },
+    changes_since_last: arr(raw.changes_since_last).map(str).filter(Boolean),
+  };
+
+  const hasContent = t.one_liner || t.call_type || t.conviction != null ||
+    t.assumptions.length || t.thesis_breakers.length || t.catalysts.length ||
+    t.watch_next_quarter.length || t.prediction.statement;
+  return hasContent ? t : undefined;
 }
 
 /* ---------------- sector hygiene ----------------
@@ -158,11 +211,13 @@ function rowToEntry(r) {
     rating: r.rating, status: r.status, price: r.price, target: r.target,
     link: r.link, date: r.report_date, notes: r.notes,
     livePrice: r.live_price, liveAsOf: r.live_as_of, lastReviewed: r.last_reviewed,
+    // `thesis` is a jsonb column; Supabase returns it already parsed.
+    thesis: r.thesis,
   });
 }
 function entryToRow(e) {
   const c = normalize(e);
-  return {
+  const row = {
     id: c.id, ticker: c.ticker, company: c.company, sector: c.sector,
     rating: c.rating, status: c.status, price: c.price, target: c.target,
     link: c.link, report_date: c.date, notes: c.notes,
@@ -170,6 +225,12 @@ function entryToRow(e) {
     updated_at: new Date().toISOString(),
     // user_id is filled by the table's default auth.uid() on insert.
   };
+  // Only send the `thesis` key when the entry actually has one. This keeps
+  // pre-v2 saves (mark-reviewed, flat edits) from referencing the column at
+  // all, so they succeed even before the jsonb column is added; once the
+  // column exists, importing a v2 thesis persists it to the cloud.
+  if (c.thesis) row.thesis = c.thesis;
+  return row;
 }
 
 const supabaseBackend = {
