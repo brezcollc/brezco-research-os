@@ -5,16 +5,24 @@
    touching any of this rendering / event code.
    ============================================================ */
 
-import { dataStore, CANONICAL_SECTORS, auth } from './dataStore.js?v=20260907d';
-import { refreshPrices } from './prices.js?v=20260907d';
+import { dataStore, CANONICAL_SECTORS, auth } from './dataStore.js?v=20260908a';
+import { refreshPrices } from './prices.js?v=20260908a';
 
 /* ============================================================
    Review Queue thresholds — tweak these freely.
    ============================================================ */
 const QUEUE_STALE_MIN_DAYS  = 30;  // only flag "needs review" once this many days stale
-const QUEUE_STALE_COUNT     = 8;   // max cards to surface in the stale section
+const QUEUE_SECTION_CAP     = 6;   // cards shown per section before "+N more"
 const QUEUE_BIG_MOVE_PCT    = 20;  // |% change since report price| that counts as a big mover
 const QUEUE_NEAR_TARGET_PCT = 10;  // live price within this % of target = "approaching target"
+
+/* Review-queue status priority. Watching floats to the top: Ian tracks his
+   holdings daily in his brokerage, so it's the watchlist names he loses track
+   of that the queue should surface first. */
+const QUEUE_STATUS_PRIORITY = { Watching: 0, Holding: 1, Unset: 2, Passed: 3 };
+function queueStatusRank(e) {
+  return QUEUE_STATUS_PRIORITY[e.status || 'Unset'] ?? 2;
+}
 
 /* ---------------- in-memory view state ---------------- */
 const state = {
@@ -27,6 +35,8 @@ const state = {
   timelineTicker: null, // when set, main panel shows that ticker's thesis timeline
   priceRefreshDone: false, // has a live-price refresh run in this browser yet
   userEmail: '',           // signed-in account email
+  queueWatchingOnly: false,        // review-queue filter: show only Watching names
+  queueExpanded: { near: false, movers: false, stale: false }, // per-section "+N more"
 };
 
 const ALL = '__ALL__';
@@ -63,6 +73,8 @@ async function startApp(user) {
   state.entries = await dataStore.init();
   state.priceRefreshDone = !!(await dataStore.getSetting('lastRefresh'));
   state.userEmail = user?.email || '';
+  // Remember the queue's "Watching only" toggle between visits (per-device).
+  try { state.queueWatchingOnly = localStorage.getItem('brezco.queue.watchingOnly') === '1'; } catch {}
   wireStaticEvents();
   populateSectorSelect();
   render();
@@ -301,29 +313,37 @@ function computeQueue() {
   const tiles = allTiles();
   const anyLive = state.entries.some(e => num(e.livePrice) != null);
 
-  const stale = tiles
-    .filter(t => {
-      const d = daysSinceReviewed(t.rep);
-      return d != null && d >= QUEUE_STALE_MIN_DAYS;   // needs a real date, and be old enough
-    })
-    .sort((a, b) => daysSinceReviewed(b.rep) - daysSinceReviewed(a.rep)) // most stale first
-    .slice(0, QUEUE_STALE_COUNT);
+  const near = [], movers = [], stale = [];
+  for (const t of tiles) {
+    const dTarget = distanceToTargetPct(t.rep);
+    const mv = moveSinceReport(t.rep);
+    const days = daysSinceReviewed(t.rep);
+    const isNear  = dTarget != null && dTarget <= QUEUE_NEAR_TARGET_PCT;
+    const isMover = mv != null && Math.abs(mv) >= QUEUE_BIG_MOVE_PCT;
+    const isStale = days != null && days >= QUEUE_STALE_MIN_DAYS;
+    if (!isNear && !isMover && !isStale) continue;
 
-  const movers = tiles
-    .filter(t => {
-      const m = moveSinceReport(t.rep);
-      return m != null && Math.abs(m) >= QUEUE_BIG_MOVE_PCT;
-    })
-    .sort((a, b) => Math.abs(moveSinceReport(b.rep)) - Math.abs(moveSinceReport(a.rep)));
+    // Tag EVERY reason that applies, so a card's secondary reasons stay visible
+    // even though it's routed to a single section below.
+    t.queueReasons = { isNear, isMover, isStale, dTarget, mv, days };
 
-  const near = tiles
-    .filter(t => {
-      const d = distanceToTargetPct(t.rep);
-      return d != null && d <= QUEUE_NEAR_TARGET_PCT;
-    })
-    .sort((a, b) => distanceToTargetPct(a.rep) - distanceToTargetPct(b.rep)); // closest first
+    // One name, one place — route by urgency: near target > big move > stale.
+    if (isNear) near.push(t);
+    else if (isMover) movers.push(t);
+    else stale.push(t);
+  }
 
-  const distinct = new Set([...stale, ...movers, ...near].map(t => t.rep.id)).size;
+  // Watching-first within each section, then the section's own metric.
+  near.sort((a, b) => queueStatusRank(a.rep) - queueStatusRank(b.rep)
+    || a.queueReasons.dTarget - b.queueReasons.dTarget);            // closest to target first
+  movers.sort((a, b) => queueStatusRank(a.rep) - queueStatusRank(b.rep)
+    || Math.abs(b.queueReasons.mv) - Math.abs(a.queueReasons.mv));  // biggest move first
+  stale.sort((a, b) => queueStatusRank(a.rep) - queueStatusRank(b.rep)
+    || b.queueReasons.days - a.queueReasons.days);                  // most stale first
+
+  // Deduped, so distinct is simply the sum. This drives the sidebar badge and
+  // is deliberately NOT affected by the Watching-only view filter.
+  const distinct = near.length + movers.length + stale.length;
   return { stale, movers, near, anyLive, distinct };
 }
 
@@ -334,38 +354,63 @@ function renderQueue() {
 
   const head = document.createElement('div');
   head.className = 'queue-head';
+  const titleWrap = document.createElement('div');
+  titleWrap.className = 'queue-titlewrap';
   const h = document.createElement('h2');
   h.className = 'queue-title';
   h.textContent = '⚡ Review Queue';
   const sub = document.createElement('p');
   sub.className = 'queue-sub';
-  sub.textContent = 'What needs your attention — stale theses, big moves, and names near target.';
-  head.append(h, sub);
+  sub.textContent = 'What needs your attention — names near target, big moves, and stale theses.';
+  titleWrap.append(h, sub);
+
+  // "Watching only" toggle — one click to hide holdings/passed and focus on
+  // the watchlist names (the ones easy to lose track of). Persists per-device.
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'queue-toggle' + (state.queueWatchingOnly ? ' on' : '');
+  toggle.textContent = state.queueWatchingOnly ? '👁 Watching only · ON' : '👁 Watching only';
+  toggle.title = 'Show only names you are Watching';
+  toggle.addEventListener('click', () => {
+    state.queueWatchingOnly = !state.queueWatchingOnly;
+    try { localStorage.setItem('brezco.queue.watchingOnly', state.queueWatchingOnly ? '1' : ''); } catch {}
+    renderQueue();
+  });
+  head.append(titleWrap, toggle);
   view.appendChild(head);
 
-  if (!q.stale.length && !q.movers.length && !q.near.length) {
+  // Apply the Watching-only view filter (the sidebar badge stays the full count).
+  const filt = list => state.queueWatchingOnly
+    ? list.filter(t => (t.rep.status || 'Unset') === 'Watching')
+    : list;
+  const near = filt(q.near), movers = filt(q.movers), stale = filt(q.stale);
+
+  if (!stale.length && !movers.length && !near.length) {
     const done = document.createElement('div');
     done.className = 'caught-up';
+    const extra = state.queueWatchingOnly
+      ? 'No Watching names need review right now. Turn off “Watching only” to see holdings and passed names too.'
+      : 'Nothing needs review right now. Browse by sector from the sidebar, or refresh prices to surface movers.';
     done.innerHTML = '<div class="caught-up-mark">✓</div>'
       + '<p class="caught-up-title">You’re caught up</p>'
-      + '<p class="caught-up-sub">Nothing needs review right now. Browse by sector from the sidebar, or refresh prices to surface movers.</p>';
+      + `<p class="caught-up-sub">${extra}</p>`;
     view.appendChild(done);
     return;
   }
 
   const liveHint = 'Refresh prices (⟳ top bar) to populate this section.';
   view.appendChild(queueSection(
-    'Hasn’t Been Reviewed In A While', q.stale,
-    `Nothing older than ${QUEUE_STALE_MIN_DAYS} days.`));
+    'Approaching Target', near, 'near',
+    q.anyLive ? `Nothing within ${QUEUE_NEAR_TARGET_PCT}% of target.` : liveHint));
   view.appendChild(queueSection(
-    'Big Moves Since Report', q.movers,
+    'Big Moves Since Report', movers, 'movers',
     q.anyLive ? `Nothing has moved ±${QUEUE_BIG_MOVE_PCT}% since its report.` : liveHint));
   view.appendChild(queueSection(
-    'Approaching Target', q.near,
-    q.anyLive ? `Nothing within ${QUEUE_NEAR_TARGET_PCT}% of target.` : liveHint));
+    'Hasn’t Been Reviewed In A While', stale, 'stale',
+    `Nothing older than ${QUEUE_STALE_MIN_DAYS} days.`));
 }
 
-function queueSection(title, tiles, emptyHint) {
+function queueSection(title, tiles, key, emptyHint) {
   const sec = document.createElement('section');
   sec.className = 'queue-section';
 
@@ -380,10 +425,26 @@ function queueSection(title, tiles, emptyHint) {
   sec.appendChild(h);
 
   if (tiles.length) {
+    const expanded = !!state.queueExpanded[key];
+    const shown = expanded ? tiles : tiles.slice(0, QUEUE_SECTION_CAP);
     const grid = document.createElement('div');
     grid.className = 'card-grid';
-    for (const t of tiles) grid.appendChild(card(t.rep, t));
+    for (const t of shown) grid.appendChild(card(t.rep, t));
     sec.appendChild(grid);
+
+    if (tiles.length > QUEUE_SECTION_CAP) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'queue-more';
+      more.textContent = expanded
+        ? '▲ Show fewer'
+        : `+ ${tiles.length - QUEUE_SECTION_CAP} more`;
+      more.addEventListener('click', () => {
+        state.queueExpanded[key] = !expanded;
+        renderQueue();
+      });
+      sec.appendChild(more);
+    }
   } else {
     const hint = document.createElement('p');
     hint.className = 'queue-empty-hint';
@@ -512,6 +573,29 @@ function fmtMoney(v) {
   return n == null ? '—' : '$' + n.toFixed(2);
 }
 
+/* Small chips summarizing why a card is in the review queue. */
+function queueReasonTags(r) {
+  const wrap = document.createElement('div');
+  wrap.className = 'queue-reason-tags';
+  if (r.isNear && r.dTarget != null) {
+    wrap.appendChild(reasonChip(`◎ ${r.dTarget.toFixed(0)}% to target`, 'near'));
+  }
+  if (r.isMover && r.mv != null) {
+    const up = r.mv >= 0;
+    wrap.appendChild(reasonChip(`${up ? '▲ +' : '▼ '}${r.mv.toFixed(0)}% since report`, up ? 'up' : 'down'));
+  }
+  if (r.isStale && r.days != null) {
+    wrap.appendChild(reasonChip(`◷ ${r.days}d unreviewed`, 'stale'));
+  }
+  return wrap;
+}
+function reasonChip(text, cls) {
+  const c = document.createElement('span');
+  c.className = 'reason-chip reason-' + cls;
+  c.textContent = text;
+  return c;
+}
+
 function card(e, tile) {
   const isMacro = e.ticker === 'MACRO';
   const node = document.createElement('article');
@@ -567,6 +651,11 @@ function card(e, tile) {
 
   top.append(ident, badge);
   node.appendChild(top);
+
+  /* --- review-queue reason tags: only present on queue tiles. Shows every
+     reason the card is in the queue (near target / big move / stale), so the
+     one-name-one-section routing never hides a secondary reason. --- */
+  if (tile && tile.queueReasons) node.appendChild(queueReasonTags(tile.queueReasons));
 
   /* --- notes --- */
   if (e.notes) {
