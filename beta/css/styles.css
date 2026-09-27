@@ -561,6 +561,13 @@ a:hover { text-decoration: underline; }
   border-color: var(--gold-dark);
 }
 .mark-reviewed:active { transform: translateY(1px); }
+.mark-reviewed:disabled { opacity: .6; cursor: default; }
+.card.card-leaving {
+  opacity: 0;
+  transform: scale(.96);
+  transition: opacity .25s ease, transform .25s ease;
+  pointer-events: none;
+}
 
 /* ===================== RATING FILTER CHIPS ===================== */
 .rating-filter {

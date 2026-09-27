@@ -5,8 +5,8 @@
    touching any of this rendering / event code.
    ============================================================ */
 
-import { dataStore, CANONICAL_SECTORS, auth } from './dataStore.js?v=20260908a';
-import { refreshPrices } from './prices.js?v=20260908a';
+import { dataStore, CANONICAL_SECTORS, auth } from './dataStore.js?v=20260927a';
+import { refreshPrices } from './prices.js?v=20260927a';
 
 /* ============================================================
    Review Queue thresholds — tweak these freely.
@@ -15,6 +15,7 @@ const QUEUE_STALE_MIN_DAYS  = 30;  // only flag "needs review" once this many da
 const QUEUE_SECTION_CAP     = 6;   // cards shown per section before "+N more"
 const QUEUE_BIG_MOVE_PCT    = 20;  // |% change since report price| that counts as a big mover
 const QUEUE_NEAR_TARGET_PCT = 10;  // live price within this % of target = "approaching target"
+const QUEUE_REVIEW_SNOOZE_DAYS = 7; // "Mark reviewed" hides near-target / big-move alerts this long
 
 /* Review-queue status priority. Watching floats to the top: Ian tracks his
    holdings daily in his brokerage, so it's the watchlist names he loses track
@@ -318,8 +319,12 @@ function computeQueue() {
     const dTarget = distanceToTargetPct(t.rep);
     const mv = moveSinceReport(t.rep);
     const days = daysSinceReviewed(t.rep);
-    const isNear  = dTarget != null && dTarget <= QUEUE_NEAR_TARGET_PCT;
-    const isMover = mv != null && Math.abs(mv) >= QUEUE_BIG_MOVE_PCT;
+    // Price alerts are snoozed for a few days after an explicit "Mark reviewed",
+    // so acknowledging a tile actually clears it from the queue.
+    const reviewedDays = t.rep.lastReviewed ? daysSince(t.rep.lastReviewed) : null;
+    const snoozed = reviewedDays != null && reviewedDays < QUEUE_REVIEW_SNOOZE_DAYS;
+    const isNear  = !snoozed && dTarget != null && dTarget <= QUEUE_NEAR_TARGET_PCT;
+    const isMover = !snoozed && mv != null && Math.abs(mv) >= QUEUE_BIG_MOVE_PCT;
     const isStale = days != null && days >= QUEUE_STALE_MIN_DAYS;
     if (!isNear && !isMover && !isStale) continue;
 
@@ -764,7 +769,7 @@ function card(e, tile) {
   markBtn.className = 'mark-reviewed';
   markBtn.textContent = '✓ Mark reviewed';
   markBtn.title = 'Set last reviewed to today';
-  markBtn.addEventListener('click', ev => { ev.stopPropagation(); markReviewed(e.id); });
+  markBtn.addEventListener('click', ev => { ev.stopPropagation(); markReviewed(e.id, node, markBtn); });
 
   reviewRow.append(rdot, rlabel, markBtn);
   node.appendChild(reviewRow);
@@ -1285,12 +1290,26 @@ async function saveEntry(ev) {
   toast(entry.id && $('#f_id').value ? 'Research updated.' : 'Research added.', 'ok');
 }
 
-/* Bump an entry back to "fresh" — stamp lastReviewed = today. */
-async function markReviewed(id) {
-  await dataStore.markReviewed(id, todayISO());
-  state.entries = await dataStore.getAll();
-  renderCards();
-  toast('Marked reviewed today.', 'ok');
+/* Bump an entry back to "fresh" — stamp lastReviewed = today, then re-render
+   the ACTIVE view (queue, grid or timeline) so the tile visibly updates. In the
+   queue, the card fades out first since it's about to leave the list. */
+async function markReviewed(id, cardNode, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const inQueue = state.activeSector === QUEUE && !state.timelineTicker;
+  try {
+    await dataStore.markReviewed(id, todayISO());
+    state.entries = await dataStore.getAll();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Mark reviewed'; }
+    toast('Could not mark reviewed: ' + (err.message || err), 'err');
+    return;
+  }
+  if (inQueue && cardNode) {
+    cardNode.classList.add('card-leaving');
+    await new Promise(r => setTimeout(r, 250));
+  }
+  render();
+  toast(inQueue ? 'Marked reviewed — removed from the queue.' : 'Marked reviewed today.', 'ok');
 }
 
 /* ============================================================

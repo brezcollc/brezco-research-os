@@ -4,7 +4,7 @@
    sandboxed Artifact, so external ES modules are allowed).
    ============================================================ */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { SUPABASE_URL, SUPABASE_KEY } from './config.js?v=20260908a';
+import { SUPABASE_URL, SUPABASE_KEY } from './config.js?v=20260927a';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {

@@ -15,8 +15,8 @@
    set `const backend = apiBackend;`. Nothing in app.js changes.
    ============================================================ */
 
-import { SEED_ENTRIES } from './seed.js?v=20260908a';
-import { supabase } from './supabase.js?v=20260908a';
+import { SEED_ENTRIES } from './seed.js?v=20260927a';
+import { supabase } from './supabase.js?v=20260927a';
 
 const KEYS = {
   entries:  'brezco.research.entries.v1',
