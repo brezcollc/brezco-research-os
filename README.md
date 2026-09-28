@@ -1,90 +1,59 @@
 # Brezco Research OS
 
-A private equity-research dashboard for organizing institutional-style research
-reports into a clickable **sector → ticker → report** structure, with live price
-vs. price-target tracking.
+A private investment-research system: a coverage table, a company page per ticker
+with a thesis timeline, and a Review Queue that surfaces what needs a decision.
 
-> "Bloomberg terminal meets private bank." Navy + gold, serif headers, sans-serif data.
+Live app: https://brezcollc.github.io/brezco-research-os/beta/ (the root URL redirects there).
+How to use it for research: [docs/PLAYBOOK.md](docs/PLAYBOOK.md).
 
-## What it does
+## How it fits together
 
-- Organizes research entries by sector, with scannable, rating-colored ticker cards.
-- Shows report-day price → price target with computed upside/downside.
-- Fetches **live prices** (Finnhub free tier) and shows "% since report".
-- Quick **Add / Edit** form, **Paste-from-Claude** JSON import, per-ticker refresh.
-- Data persists in the browser (`localStorage`) — single device, Phase 1.
+```
+Claude (prompt from ⧉ Research prompt)  ──JSON──▶  ⇪ Paste from Claude  ──▶  Supabase (research_entries)
+scripts/update_prices.py  (Yahoo Finance)  ─────────────────────────────▶  Supabase (live_price, live_as_of)
+                                                                              │
+                                        beta/ (static site, GitHub Pages) ◀───┘
+```
 
-## Running locally
+- **One row per report.** A ticker's rows form its timeline; the newest row is the current call.
+- **The browser never writes prices.** `live_price`/`live_as_of` are owned by the price feed; browser
+  writes are targeted to the rows/columns that changed.
+- **Everything derived is a calculation** (upside, move since report, scenario-weighted target) and is
+  labeled `CALC` in the UI. Nothing is fetched or estimated client-side.
 
-It's a static site — no build step. Serve the folder with any static server:
+## Files
+
+```
+beta/index.html        markup + modals
+beta/css/styles.css    design system
+beta/js/app.js         UI: queue, table, cards, company page, modals
+beta/js/dataStore.js   data layer (Supabase; normalizes the thesis schema)
+beta/js/prompts.js     research prompt library (screen / deep dive / earnings / thesis check)
+beta/js/demo.js        sample data for local preview only
+scripts/update_prices.py   price feed (run with the price-writer secret)
+index.html             redirect to /beta/
+```
+
+## Run locally
 
 ```bash
 python3 -m http.server 8000
-# then open http://localhost:8000
 ```
 
-(Opening `index.html` directly via `file://` will not work because the app uses
-JavaScript ES modules, which browsers only load over `http(s)`.)
+Open http://localhost:8000/beta/?demo=1 for a no-login preview with sample (fake) data, or
+http://localhost:8000/beta/ to sign in to your real data.
 
-## Live price refresh
+## Deploy
 
-1. Get a free API key at [finnhub.io](https://finnhub.io).
-2. Click the ⚙ (settings) icon → paste the key → Save.
-3. Click **Refresh Prices**.
+Push to `main`; GitHub Pages serves it. Bump the `?v=` cache-busting string in `beta/index.html`
+and every internal import on each deploy (they must all match).
 
-The key is stored only in your browser's `localStorage` and is sent only to
-Finnhub's quote endpoint — nowhere else.
+## Thesis JSON schema
 
-## Architecture
+Required: `ticker`, `company`, `sector`. The full schema (v3) is in `beta/js/prompts.js`.
+Older (v2) theses keep working; v3 adds `research_stage`, `variant_view`, `market_implies`,
+`key_drivers`, `scenarios`, `risks`, `data_gaps`, `next_review`.
 
-```
-index.html          markup + modals
-css/styles.css      the whole design system
-js/
-  app.js            UI controller (rendering, modals, events)
-  dataStore.js      data-access ABSTRACTION LAYER  ← the important bit
-  seed.js           first-load starting library
-  prices.js         Finnhub live-price fetching
-```
-
-### Phase 2 readiness (backend + cross-device)
-
-The UI never touches `localStorage` directly — every read/write goes through
-`dataStore` (`js/dataStore.js`), whose public methods are already `async`
-(Promise-returning). To move to a real backend (Supabase / Cloudflare D1) so data
-syncs across devices and a Claude session can write entries directly:
-
-1. Implement an `apiBackend` object in `dataStore.js` with the same method
-   signatures as `localBackend` (`readAll`, `writeAll`, `readSettings`,
-   `writeSettings`) that makes `fetch()` calls to your API.
-2. Change the single line `const backend = localBackend;` to
-   `const backend = apiBackend;`.
-
-No rendering or event code in `app.js` changes.
-
-## Deployment
-
-Hosted on **GitHub Pages** off the `main` branch. Push-to-deploy:
-
-```
-edit code → git commit → git push → live site updates automatically
-```
-
-A `.nojekyll` file is present so GitHub serves the files as-is (no Jekyll
-processing).
-
-## Data model
-
-```js
-{
-  id, ticker, company, sector,
-  rating: "BUY" | "HOLD" | "SELL" | "AVOID" | "N/A",
-  price, target,        // USD strings, no "$"
-  link, date,           // report URL, YYYY-MM-DD
-  notes,                // one-line thesis
-  livePrice, liveAsOf   // filled by live refresh
-}
-```
-
-`ticker: "MACRO"` marks non-ticker macro/educational content and is skipped by
-the live-price refresh.
+Sectors: AI Infra & Semis · Power & Energy · Defense & Security · Fintech & Consumer ·
+Industrials & Infrastructure · Small-Cap Discovery · Media & Entertainment · Macro & Education.
+`ticker: "MACRO"` marks non-security content.

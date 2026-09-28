@@ -6,7 +6,7 @@
   <title>Brezco Research OS</title>
   <meta name="description" content="Brezco Capital — private equity research dashboard." />
   <meta name="version" content="1.0" />
-  <link rel="stylesheet" href="css/styles.css?v=20260927a" />
+  <link rel="stylesheet" href="css/styles.css?v=20260928a" />
 </head>
 <body>
   <!-- ===================== LOGIN GATE ===================== -->
@@ -24,6 +24,8 @@
     </div>
   </div>
 
+  <div class="demo-banner">DEMO MODE — sample data for local preview. Prices, dates and theses are made up.</div>
+
   <!-- ===================== TOP BAR ===================== -->
   <header class="topbar">
     <div class="brand">
@@ -35,13 +37,14 @@
     </div>
 
     <div class="topbar-stats" id="topStats">
-      <div class="stat"><span class="stat-val" id="statReports">0</span><span class="stat-lbl">Reports</span></div>
-      <div class="stat"><span class="stat-val" id="statSectors">0</span><span class="stat-lbl">Sectors</span></div>
-      <div class="stat"><span class="stat-val" id="statTickers">0</span><span class="stat-lbl">Tickers</span></div>
+      <div class="stat"><span class="stat-val" id="statTickers">0</span><span class="stat-lbl">Covered</span></div>
+      <div class="stat"><span class="stat-val" id="statHolding">0</span><span class="stat-lbl">Holding</span></div>
+      <div class="stat"><span class="stat-val" id="statWatching">0</span><span class="stat-lbl">Watching</span></div>
+      <div class="stat stat-alert"><span class="stat-val" id="statQueue">0</span><span class="stat-lbl">Need attention</span></div>
     </div>
 
     <div class="topbar-actions">
-      <button class="btn btn-gold" id="refreshBtn" title="Fetch live prices from Finnhub">
+      <button class="btn btn-gold" id="refreshBtn" title="Reload the latest prices written by the price feed">
         <span class="btn-ico">⟳</span> Refresh Prices
       </button>
       <button class="btn btn-ghost btn-icon" id="settingsBtn" title="Settings" aria-label="Settings">⚙</button>
@@ -53,26 +56,8 @@
     <aside class="sidebar">
       <div class="sidebar-actions">
         <button class="btn btn-gold btn-block" id="addBtn">+ Add Research</button>
+        <button class="btn btn-outline btn-block" id="promptBtn">⧉ Research prompt</button>
         <button class="btn btn-outline btn-block" id="importBtn">⇪ Paste from Claude</button>
-      </div>
-      <div class="sidebar-sort">
-        <label for="sortSelect">Sort</label>
-        <select id="sortSelect">
-          <option value="recent">Most recent</option>
-          <option value="upside">Most upside first</option>
-          <option value="downside">Most downside first</option>
-          <option value="stale">Most stale first</option>
-        </select>
-      </div>
-      <div class="sidebar-sort">
-        <label for="statusFilter">Status</label>
-        <select id="statusFilter">
-          <option value="">All positions</option>
-          <option value="Holding">Holding</option>
-          <option value="Watching">Watching</option>
-          <option value="Passed">Passed</option>
-          <option value="Unset">Unset</option>
-        </select>
       </div>
       <nav class="sector-nav" id="sectorNav" aria-label="Sectors"></nav>
       <div class="sidebar-footer">
@@ -86,6 +71,28 @@
         <div class="search-wrap">
           <span class="search-ico">⌕</span>
           <input type="search" id="searchInput" placeholder="Search ticker, company, thesis…" autocomplete="off" />
+        </div>
+        <div class="toolbar">
+          <select id="statusFilter" aria-label="Filter by position status">
+            <option value="">All positions</option>
+            <option value="Holding">Holding</option>
+            <option value="Watching">Watching</option>
+            <option value="Passed">Passed</option>
+            <option value="Unset">No status</option>
+          </select>
+          <select id="sortSelect" aria-label="Sort">
+            <option value="" hidden>Custom sort</option>
+            <option value="upside">Most upside to target</option>
+            <option value="downside">Most downside to target</option>
+            <option value="catalyst">Next catalyst first</option>
+            <option value="conviction">Highest conviction</option>
+            <option value="stale">Most stale first</option>
+            <option value="recent">Most recent report</option>
+          </select>
+          <div class="view-toggle" id="viewToggle" role="group" aria-label="View">
+            <button type="button" data-view="table">Table</button>
+            <button type="button" data-view="cards">Cards</button>
+          </div>
         </div>
         <div class="rating-filter" id="ratingFilter" role="group" aria-label="Filter by rating">
           <button type="button" class="chip active" data-rating="">All</button>
@@ -213,17 +220,13 @@
   <div class="modal-backdrop" id="settingsModal" hidden>
     <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle">
       <div class="modal-head">
-        <h3 id="settingsModalTitle">Settings</h3>
+        <h3 id="settingsModalTitle">Account &amp; data</h3>
         <button class="modal-close" data-close aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
-        <label class="field">
-          <span>Finnhub API Key</span>
-          <input type="text" id="f_apiKey" placeholder="Paste your free Finnhub key" autocomplete="off" spellcheck="false" />
-        </label>
         <p class="modal-hint">
-          Free key from <a href="https://finnhub.io" target="_blank" rel="noopener">finnhub.io</a>.
-          Stored only in this browser's localStorage and sent only to Finnhub when you refresh prices.
+          Live prices are written by the price feed (ask Claude to “update Brezco prices”).
+          The ⟳ button reloads whatever the feed last wrote.
         </p>
         <div class="settings-danger">
           <button type="button" class="btn btn-ghost btn-sm" id="exportDataBtn">Export all data (JSON)</button>
@@ -234,8 +237,40 @@
         </div>
         <div class="modal-foot">
           <div class="foot-spacer"></div>
-          <button type="button" class="btn btn-ghost" data-close>Cancel</button>
-          <button type="button" class="btn btn-gold" id="saveSettingsBtn">Save</button>
+          <button type="button" class="btn btn-ghost" data-close>Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== RESEARCH PROMPT MODAL ===================== -->
+  <div class="modal-backdrop" id="promptModal" hidden>
+    <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="promptModalTitle">
+      <div class="modal-head">
+        <h3 id="promptModalTitle">Research prompt</h3>
+        <button class="modal-close" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row form-row-3">
+          <label class="field">
+            <span>Ticker</span>
+            <input type="text" id="p_ticker" placeholder="CLH" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span>Company</span>
+            <input type="text" id="p_company" placeholder="Clean Harbors, Inc." autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Stage</span>
+            <select id="p_type"></select>
+          </label>
+        </div>
+        <p class="modal-hint" id="p_note"></p>
+        <textarea id="p_text" class="import-area prompt-area" rows="14" readonly></textarea>
+        <div class="modal-foot">
+          <div class="foot-spacer"></div>
+          <button type="button" class="btn btn-ghost" data-close>Close</button>
+          <button type="button" class="btn btn-gold" id="p_copy">Copy prompt</button>
         </div>
       </div>
     </div>
@@ -270,6 +305,6 @@
   <!-- Cache-busting: bump ?v= on EVERY deploy (keep in sync with the ?v= on the
        internal imports in js/app.js and js/dataStore.js). A new query = a new
        URL the browser cannot serve from its 10-minute GitHub Pages cache. -->
-  <script type="module" src="js/app.js?v=20260927a"></script>
+  <script type="module" src="js/app.js?v=20260928a"></script>
 </body>
 </html>

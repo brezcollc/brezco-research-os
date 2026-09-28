@@ -2,21 +2,21 @@
    dataStore.js — data-access abstraction layer
    ------------------------------------------------------------
    ALL reads/writes of research entries and settings go through
-   this module. The UI never touches localStorage directly.
+   this module. The UI never touches the database directly.
 
-   PHASE 1 (now):   localStorage backend, implemented below.
-   PHASE 2 (later): swap the `backend` object for one that calls
-                    a real API (Supabase / Cloudflare D1). The
-                    public interface below is already async
-                    (returns Promises) so the UI does not change.
+   Backend: Supabase (one row per report, RLS-scoped to the
+   signed-in user). Writes are TARGETED — only the rows/columns
+   that changed are sent. The browser never writes live_price /
+   live_as_of: those belong to the price feed (scripts/
+   update_prices.py), so a stale browser tab can't roll prices
+   back, and a save on one device can't delete rows another
+   device added.
 
-   To migrate: implement an object with the same method
-   signatures as `localBackend` that does fetch() calls, then
-   set `const backend = apiBackend;`. Nothing in app.js changes.
+   Demo mode (localhost only, ?demo=1): an in-memory backend
+   with sample data so the UI can be previewed without login.
    ============================================================ */
 
-import { SEED_ENTRIES } from './seed.js?v=20260927a';
-import { supabase } from './supabase.js?v=20260927a';
+import { supabase } from './supabase.js?v=20260928a';
 
 const KEYS = {
   entries:  'brezco.research.entries.v1',
@@ -100,11 +100,39 @@ function normalizeThesis(raw) {
       by:        str(raw.prediction && raw.prediction.by),
     },
     changes_since_last: arr(raw.changes_since_last).map(str).filter(Boolean),
+
+    /* ---- v3 fields (all optional; older theses simply don't have them) ---- */
+    research_stage: ['screen', 'deep_dive', 'update'].includes(str(raw.research_stage).toLowerCase())
+      ? str(raw.research_stage).toLowerCase() : '',
+    variant_view: str(raw.variant_view),          // what the market is missing
+    market_implies: str(raw.market_implies),      // expectations embedded in the price
+    key_drivers: arr(raw.key_drivers).map(d => ({
+      driver:      str(d && d.driver),
+      current:     str(d && d.current),
+      sensitivity: str(d && d.sensitivity),
+    })).filter(d => d.driver),
+    // Accepts Claude's {bull:{…},base:{…},bear:{…}} AND the stored array form,
+    // so normalizing an already-normalized thesis (every DB read) is lossless.
+    scenarios: ['bull', 'base', 'bear'].map(k => {
+      const src = raw.scenarios;
+      const s = (Array.isArray(src) ? src.find(x => x && x.case === k) : src && src[k]) || {};
+      const p = Number(String(s.probability ?? '').replace('%', ''));
+      return {
+        case: k,
+        target:      str(s.target),
+        probability: Number.isFinite(p) && p > 0 ? (p > 1 ? p / 100 : p) : null,
+        narrative:   str(s.narrative),
+      };
+    }).filter(s => s.target || s.narrative),
+    risks: arr(raw.risks).map(str).filter(Boolean),
+    data_gaps: arr(raw.data_gaps).map(str).filter(Boolean),
+    next_review: /^\d{4}-\d{2}-\d{2}$/.test(str(raw.next_review)) ? str(raw.next_review) : '',
   };
 
   const hasContent = t.one_liner || t.call_type || t.conviction != null ||
     t.assumptions.length || t.thesis_breakers.length || t.catalysts.length ||
-    t.watch_next_quarter.length || t.prediction.statement;
+    t.watch_next_quarter.length || t.prediction.statement ||
+    t.variant_view || t.scenarios.length || t.key_drivers.length;
   return hasContent ? t : undefined;
 }
 
@@ -119,6 +147,7 @@ export const CANONICAL_SECTORS = [
   'Power & Energy',
   'Defense & Security',
   'Fintech & Consumer',
+  'Industrials & Infrastructure',
   'Small-Cap Discovery',
   'Media & Entertainment',
   'Macro & Education',
@@ -164,7 +193,7 @@ function normalizeRating(r) {
 }
 
 /* Read this browser's Phase-1 (localStorage) entries — the migration source
-   uploaded to the cloud on first login. Never written to in Phase 2, so it
+   uploaded to the cloud on first login. Never written to afterwards, so it
    also survives as a local backup. */
 function loadLegacyLocalEntries() {
   try {
@@ -176,35 +205,19 @@ function loadLegacyLocalEntries() {
   }
 }
 
-/* ---------- localStorage backend ---------- */
-const localBackend = {
-  async readAll() {
-    try {
-      const raw = localStorage.getItem(KEYS.entries);
-      const arr = raw ? JSON.parse(raw) : [];
-      return Array.isArray(arr) ? arr.map(normalize) : [];
-    } catch {
-      return [];
-    }
+/* Per-device settings (UI preferences) live in localStorage. */
+const settingsStore = {
+  read() {
+    try { return JSON.parse(localStorage.getItem(KEYS.settings) || '{}') || {}; }
+    catch { return {}; }
   },
-  async writeAll(entries) {
-    localStorage.setItem(KEYS.entries, JSON.stringify(entries));
-  },
-  async readSettings() {
-    try {
-      return JSON.parse(localStorage.getItem(KEYS.settings) || '{}') || {};
-    } catch {
-      return {};
-    }
-  },
-  async writeSettings(obj) {
-    localStorage.setItem(KEYS.settings, JSON.stringify(obj));
+  write(obj) {
+    try { localStorage.setItem(KEYS.settings, JSON.stringify(obj)); } catch {}
   },
 };
 
-/* ---------- Supabase backend (Phase 2) ---------- */
-/* DB uses snake_case columns; the app model uses camelCase. Map both ways.
-   Settings (Finnhub key, last refresh) stay in localStorage — per-device. */
+/* ---------- Supabase backend ---------- */
+/* DB uses snake_case columns; the app model uses camelCase. Map both ways. */
 function rowToEntry(r) {
   return normalize({
     id: r.id, ticker: r.ticker, company: r.company, sector: r.sector,
@@ -215,20 +228,20 @@ function rowToEntry(r) {
     thesis: r.thesis,
   });
 }
+
+/* The columns the BROWSER owns. live_price / live_as_of are deliberately
+   absent: the price feed owns them, and a browser write must never roll them
+   back to whatever this tab loaded earlier. */
 function entryToRow(e) {
   const c = normalize(e);
   const row = {
     id: c.id, ticker: c.ticker, company: c.company, sector: c.sector,
     rating: c.rating, status: c.status, price: c.price, target: c.target,
     link: c.link, report_date: c.date, notes: c.notes,
-    live_price: c.livePrice, live_as_of: c.liveAsOf, last_reviewed: c.lastReviewed,
+    last_reviewed: c.lastReviewed,
     updated_at: new Date().toISOString(),
     // user_id is filled by the table's default auth.uid() on insert.
   };
-  // Only send the `thesis` key when the entry actually has one. This keeps
-  // pre-v2 saves (mark-reviewed, flat edits) from referencing the column at
-  // all, so they succeed even before the jsonb column is added; once the
-  // column exists, importing a v2 thesis persists it to the cloud.
   if (c.thesis) row.thesis = c.thesis;
   return row;
 }
@@ -239,39 +252,77 @@ const supabaseBackend = {
     if (error) throw error;
     return (data || []).map(rowToEntry);
   },
-  /* Make the user's rows equal to `entries`: upsert all, delete the rest.
-     Keeps the exact "replace whole dataset" semantics the rest of the code
-     relies on, so every dataStore method works unchanged. */
-  async writeAll(entries) {
+  /* Insert-or-update exactly these entries. Rows with and without a thesis
+     are sent separately so a batch never nulls out a column a row didn't
+     mention. */
+  async upsertMany(entries) {
     const rows = entries.map(entryToRow);
-    const keep = new Set(rows.map(r => r.id));
-
-    const { data: existing, error: selErr } = await supabase.from(TABLE).select('id');
-    if (selErr) throw selErr;
-    const toDelete = (existing || []).map(r => r.id).filter(id => !keep.has(id));
-
-    if (rows.length) {
-      const { error } = await supabase.from(TABLE).upsert(rows, { onConflict: 'id' });
-      if (error) throw error;
-    }
-    if (toDelete.length) {
-      const { error } = await supabase.from(TABLE).delete().in('id', toDelete);
+    for (const group of [rows.filter(r => r.thesis), rows.filter(r => !r.thesis)]) {
+      if (!group.length) continue;
+      const { error } = await supabase.from(TABLE).upsert(group, { onConflict: 'id' });
       if (error) throw error;
     }
   },
-  // settings remain per-device in localStorage
-  readSettings: localBackend.readSettings,
-  writeSettings: localBackend.writeSettings,
+  async update(id, fields) {
+    const { error } = await supabase.from(TABLE)
+      .update({ ...fields, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) throw error;
+  },
+  async updateWhere(column, value, fields) {
+    const { data, error } = await supabase.from(TABLE)
+      .update({ ...fields, updated_at: new Date().toISOString() })
+      .eq(column, value).select('id');
+    if (error) throw error;
+    return (data || []).length;
+  },
+  async remove(id) {
+    const { error } = await supabase.from(TABLE).delete().eq('id', id);
+    if (error) throw error;
+  },
 };
 
-// The single point of backend selection.
-const backend = supabaseBackend;
+/* ---------- in-memory demo backend (localhost ?demo=1 only) ---------- */
+function memoryBackend(seed) {
+  let rows = seed.map(normalize);
+  const byId = id => rows.find(r => r.id === id);
+  const toModel = f => {
+    const m = { ...f };
+    if ('last_reviewed' in m) { m.lastReviewed = m.last_reviewed; delete m.last_reviewed; }
+    delete m.updated_at;
+    return m;
+  };
+  return {
+    async readAll() { return rows.map(r => normalize(JSON.parse(JSON.stringify(r)))); },
+    async upsertMany(entries) {
+      for (const e of entries) {
+        const c = normalize(e);
+        const cur = byId(c.id);
+        // mimic the real backend: live price fields are feed-owned
+        if (cur) Object.assign(cur, { ...c, livePrice: cur.livePrice, liveAsOf: cur.liveAsOf });
+        else rows.push(c);
+      }
+    },
+    async update(id, fields) { const r = byId(id); if (r) Object.assign(r, toModel(fields)); },
+    async updateWhere(column, value, fields) {
+      let n = 0;
+      for (const r of rows) if (r[column] === value) { Object.assign(r, toModel(fields)); n++; }
+      return n;
+    },
+    async remove(id) { rows = rows.filter(r => r.id !== id); },
+  };
+}
+
+export const IS_DEMO = ['localhost', '127.0.0.1'].includes(location.hostname)
+  && new URLSearchParams(location.search).has('demo');
+
+let backend = supabaseBackend;
 
 /* ============================================================
    Auth — magic-link (passwordless) email login.
    ============================================================ */
 export const auth = {
   async currentUser() {
+    if (IS_DEMO) return { email: 'demo@localhost' };
     const { data } = await supabase.auth.getUser();
     return data?.user || null;
   },
@@ -286,6 +337,7 @@ export const auth = {
     return supabase.auth.signOut();
   },
   onChange(cb) {
+    if (IS_DEMO) return;
     return supabase.auth.onAuthStateChange((_event, session) => cb(session));
   },
 };
@@ -296,45 +348,45 @@ export const auth = {
 export const dataStore = {
   /* Load the signed-in user's rows. On the very first login, if this account
      has no rows yet but this browser has Phase-1 localStorage data, upload it
-     so nothing is lost in the move to the cloud (a brand-new account with no
-     local data simply starts empty — import a backup to populate it). */
+     so nothing is lost in the move to the cloud. */
   async init() {
+    if (IS_DEMO) {
+      const { DEMO_ENTRIES } = await import('./demo.js?v=20260928a');
+      backend = memoryBackend(DEMO_ENTRIES);
+    }
     let current = await backend.readAll();
-    if (current.length === 0 && !localStorage.getItem(KEYS.supaMigrated)) {
+    if (!IS_DEMO && current.length === 0 && !localStorage.getItem(KEYS.supaMigrated)) {
       const legacy = loadLegacyLocalEntries();
       if (legacy.length) {
-        await backend.writeAll(legacy);
+        await backend.upsertMany(legacy);
         current = await backend.readAll();
       }
       localStorage.setItem(KEYS.supaMigrated, '1');
     }
     // One-time: retire the "Company Deep Dives" catch-all if any lingered.
-    await this.migrateCompanyDeepDives();
+    await this.migrateCompanyDeepDives(current);
     // Sector hygiene: fold duplicate spellings to canonical, flag blanks.
     return this.runSectorHygiene();
   },
 
-  /* Retire the "Company Deep Dives" sector across existing browser data.
-     Known tickers -> real industry (CDD_REMAP); any other entry still tagged
-     with it -> the review bucket (never silently kept). Runs once per browser. */
-  async migrateCompanyDeepDives() {
+  /* Retire the "Company Deep Dives" sector. Known tickers -> real industry
+     (CDD_REMAP); any other entry still tagged with it -> the review bucket.
+     Runs once per browser; writes only the rows it changes. */
+  async migrateCompanyDeepDives(all) {
     if (localStorage.getItem(KEYS.cddMigrated)) return { migrated: [] };
-    const all = await backend.readAll();
     const migrated = [];
     for (const e of all) {
       if ((e.sector || '').trim() === RETIRED_SECTOR) {
         const to = CDD_REMAP[e.ticker] || REVIEW_SECTOR;
         migrated.push({ ticker: e.ticker, to });
-        e.sector = to;
+        await backend.update(e.id, { sector: to });
       }
     }
-    if (migrated.length) await backend.writeAll(all);
     localStorage.setItem(KEYS.cddMigrated, '1');
     return { migrated };
   },
 
-  /* Normalize every entry's sector in place; write back only if something
-     changed. Returns { entries, fixed } — fixed lists what was rewritten. */
+  /* Normalize every entry's sector; write back only the rows that changed. */
   async runSectorHygiene() {
     const all = await backend.readAll();
     const fixed = [];
@@ -342,10 +394,10 @@ export const dataStore = {
       const cleaned = hygieneSector(e.sector);
       if (cleaned !== e.sector) {
         fixed.push({ ticker: e.ticker, from: e.sector, to: cleaned });
+        await backend.update(e.id, { sector: cleaned });
         e.sector = cleaned;
       }
     }
-    if (fixed.length) await backend.writeAll(all);
     this._lastHygiene = fixed;
     return all;
   },
@@ -355,93 +407,53 @@ export const dataStore = {
     return this._lastHygiene || [];
   },
 
-  /* Rename a sector across every entry that uses it. If newName matches an
-     existing sector, this merges them. Returns the count of entries moved. */
+  /* Rename a sector across every entry that uses it (merges if newName
+     already exists). Returns the count of entries moved. */
   async renameSector(oldName, newName) {
     const target = String(newName || '').trim();
     if (!target) return 0;
-    const all = await backend.readAll();
-    let count = 0;
-    for (const e of all) {
-      if ((e.sector || '') === oldName) { e.sector = target; count++; }
-    }
-    if (count) await backend.writeAll(all);
-    return count;
+    return backend.updateWhere('sector', oldName, { sector: target });
   },
 
   async getAll() {
     return backend.readAll();
   },
 
-  async get(id) {
-    const all = await backend.readAll();
-    return all.find(e => e.id === id) || null;
-  },
-
   /* Insert or update a single entry. Returns the saved entry. */
   async upsert(entry) {
     const clean = normalize(entry);
-    const all = await backend.readAll();
-    const idx = all.findIndex(e => e.id === clean.id);
-    if (idx >= 0) all[idx] = clean; else all.push(clean);
-    await backend.writeAll(all);
+    await backend.upsertMany([clean]);
     return clean;
   },
 
-  /* Merge many entries at once (import). Returns saved entries. */
+  /* Insert/update many entries at once (import). Returns saved entries. */
   async bulkUpsert(entries) {
-    const all = await backend.readAll();
-    const byId = new Map(all.map(e => [e.id, e]));
-    const saved = [];
-    for (const raw of entries) {
-      const clean = normalize(raw);
-      byId.set(clean.id, clean);
-      saved.push(clean);
-    }
-    await backend.writeAll([...byId.values()]);
-    return saved;
-  },
-
-  /* Apply a live price to every entry sharing a ticker. */
-  async applyLivePrice(ticker, price, asOf) {
-    const all = await backend.readAll();
-    const t = String(ticker).toUpperCase();
-    let count = 0;
-    for (const e of all) {
-      if (e.ticker === t) {
-        e.livePrice = String(price);
-        e.liveAsOf = asOf;
-        count++;
-      }
-    }
-    await backend.writeAll(all);
-    return count;
+    const clean = entries.map(normalize);
+    await backend.upsertMany(clean);
+    return clean;
   },
 
   /* Stamp a single entry's lastReviewed date (YYYY-MM-DD). */
   async markReviewed(id, dateStr) {
-    const all = await backend.readAll();
-    const e = all.find(x => x.id === id);
-    if (e) {
-      e.lastReviewed = dateStr;
-      await backend.writeAll(all);
-    }
-    return e || null;
+    await backend.update(id, { last_reviewed: dateStr });
+  },
+
+  /* Set position status on a report row. */
+  async setStatus(id, status) {
+    await backend.update(id, { status: normalizeStatus(status) });
   },
 
   async remove(id) {
-    const all = await backend.readAll();
-    await backend.writeAll(all.filter(e => e.id !== id));
+    await backend.remove(id);
   },
 
-  /* ---- settings ---- */
+  /* ---- per-device settings ---- */
   async getSetting(key) {
-    const s = await backend.readSettings();
-    return s[key];
+    return settingsStore.read()[key];
   },
   async setSetting(key, value) {
-    const s = await backend.readSettings();
+    const s = settingsStore.read();
     s[key] = value;
-    await backend.writeSettings(s);
+    settingsStore.write(s);
   },
 };
