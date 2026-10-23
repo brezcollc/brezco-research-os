@@ -1,0 +1,12 @@
+# big / regenerated stuff - never commit videos
+node_modules/
+models/
+work/
+out/
+.stub/
+remotion/public/*.mp4
+remotion/public/*.woff2
+remotion/src/videos/*/plan.json
+*.mov
+*.mp4
+*.wav

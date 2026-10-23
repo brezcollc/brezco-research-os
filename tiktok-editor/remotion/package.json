@@ -1,0 +1,14 @@
+{
+  "name": "tiktok-editor-remotion",
+  "private": true,
+  "description": "Remotion compositions for the TikTok edits",
+  "dependencies": {
+    "@fontsource/montserrat": "5.3.0",
+    "@remotion/bundler": "4.0.531",
+    "@remotion/cli": "4.0.531",
+    "@remotion/renderer": "4.0.531",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.531"
+  }
+}
