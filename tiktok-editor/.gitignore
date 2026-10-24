@@ -10,3 +10,4 @@ remotion/src/videos/*/plan.json
 *.mov
 *.mp4
 *.wav
+remotion/src/videos/
