@@ -6,6 +6,9 @@ with a thesis timeline, and a Review Queue that surfaces what needs a decision.
 Live app: https://brezcollc.github.io/brezco-research-os/beta/ (the root URL redirects there).
 How to use it for research: [docs/PLAYBOOK.md](docs/PLAYBOOK.md).
 
+Also in this repo: **Runway**, a personal budgeting PWA at [`budget/`](budget/README.md)
+(https://brezcollc.github.io/brezco-research-os/budget/).
+
 ## How it fits together
 
 ```
