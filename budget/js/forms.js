@@ -135,7 +135,9 @@ export function openTxForm(opts = {}) {
       const sizeAmt = () => { amt.style.width = `${Math.max(4, (amt.value || '0.00').length + 0.6)}ch`; };
       amt.addEventListener('input', () => { amt.value = amt.value.replace(/[^\d.,]/g, ''); sizeAmt(); if (!f.billTouched) renderDyn(); });
       sizeAmt();
-      if (!ex) setTimeout(() => amt.focus(), 30);
+      // Focus synchronously, still inside the tap that opened the sheet — iOS only
+      // raises the keyboard for focus() calls made during a user gesture.
+      if (!ex) { try { amt.focus({ preventScroll: true }); } catch { amt.focus(); } }
       const dateInput = form.querySelector('[name="date"]');
       const syncDate = () => form.querySelectorAll('.date-chips [data-date]').forEach(b => b.classList.toggle('on', b.dataset.date === dateInput.value));
       form.querySelectorAll('.date-chips [data-date]').forEach(b => b.addEventListener('click', () => { dateInput.value = b.dataset.date; f.date = b.dataset.date; syncDate(); renderDyn(); }));
@@ -373,10 +375,15 @@ export function openPayBill(billId, due) {
   const st = S(), t = today();
   const b = st.bills.find(x => x.id === billId);
   if (!b) return;
+  // Default to the due date only if that still lowers the balance (it's on/after the day the
+  // balance was last set). Otherwise the app treated this money as still in the account, so
+  // paying it now must reduce the balance: default to today.
+  const anchor = st.settings.balanceDate;
+  const payDefault = due > t ? t : (!anchor || due >= anchor ? due : t);
   const html = `${sheetHeader(`Pay ${b.name}`)}
     <p class="muted" style="margin:-4px 0 16px">Due ${fmtDate(due)} · scheduled ${fmt(b.amountCents)}</p>
     ${money('amount', 'Amount paid', b.amountCents, { required: true })}
-    ${date('date', 'Paid on', due <= t ? due : t, { required: true })}
+    ${date('date', 'Paid on', payDefault, { required: true })}
     <p class="hint">If the money left your account after you last updated your balance, use that later date so your balance drops correctly.</p>
     ${footer('Mark as paid')}`;
   formSheet(html, fd => {
@@ -514,7 +521,7 @@ export function openGoalForm(id) {
     if (f.kind === 'target') {
       row.startingCents = cents(fd, 'starting', { required: false, allowZero: true }) || 0;
       row.targetDate = nonEmpty(fd.get('targetDate'));
-      if (row.targetDate) need(isValidISO(row.targetDate) && row.targetDate > today(), 'Pick a future target date.');
+      if (row.targetDate && row.targetDate !== g?.targetDate) need(isValidISO(row.targetDate) && row.targetDate > today(), 'Pick a future target date.');
     } else { row.startingCents = 0; row.targetDate = null; }
     store.upsert('goals', row);
     toast(g ? 'Goal saved' : 'Goal created');
@@ -618,11 +625,18 @@ export function openAuthForm({ onSession, mode = 'signin' } = {}) {
     need(/.+@.+\..+/.test(email), 'Enter a valid email.');
     need(pw.length >= 8, 'Password must be at least 8 characters.');
     form.querySelector('[type="submit"]').disabled = true;
+    const errEl = form.querySelector('[data-err]');
     try {
       if (f.mode === 'signup') {
         const res = await cloud.signUp(email, pw);
+        // Supabase answers a sign-up for an existing email with a user that has no
+        // identities (and sends nothing), to avoid revealing which emails exist.
+        if (res.user && Array.isArray(res.user.identities) && res.user.identities.length === 0) {
+          errEl.innerHTML = 'That email already has an account (for example from your research app). Switch to <b>Sign in</b> and tap <b>Forgot password?</b> to set a password.';
+          return false;
+        }
         if (!res.session) {
-          form.querySelector('[data-err]').innerHTML = `<span class="good">Check ${esc(email)} for a confirmation link, then come back and sign in.</span>`;
+          errEl.innerHTML = `<span class="good">Check ${esc(email)} for a confirmation link, then come back here and sign in.</span>`;
           return false;
         }
         await onSession(res.session);
@@ -630,6 +644,13 @@ export function openAuthForm({ onSession, mode = 'signin' } = {}) {
         const session = await cloud.signIn(email, pw);
         await onSession(session);
       }
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (/invalid login credentials/i.test(msg)) throw new Error('Email or password is wrong. If you’ve only ever signed in with an emailed link, tap “Forgot password?” to set a password.');
+      if (/email not confirmed/i.test(msg)) throw new Error('Confirm your email first — check your inbox for the link, then sign in.');
+      if (/rate limit|too many/i.test(msg)) throw new Error('Too many attempts — wait a few minutes and try again.');
+      if (/failed to fetch|network|load failed/i.test(msg)) throw new Error('Can’t reach the server. Check your connection and try again.');
+      throw e;
     } finally { form.querySelector('[type="submit"]').disabled = false; }
   }, {
     onMount: (sh, form) => {

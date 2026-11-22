@@ -64,6 +64,10 @@ function renderWelcome() {
 
 store.subscribe(reason => {
   if (reason === 'signout') { ui.tab = 'dashboard'; ui.page = null; closeAllSheets(); }
+  if (reason === 'sync' && store.sync.status === 'synced') {
+    if (store.sync.migratedFromDevice) { store.sync.migratedFromDevice = false; toast('Your device data was copied to your account'); }
+    ensureDefaults(); // no-op unless this account has no categories yet
+  }
   render();
 });
 
@@ -224,12 +228,26 @@ document.addEventListener('change', e => {
   if (k === 'txCat') { ui.tx.cat = e.target.value; render(); }
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+document.addEventListener('toggle', e => {
+  const k = e.target?.dataset?.key;
+  if (k) { if (e.target.open) ui.openDetails.add(k); else ui.openDetails.delete(k); }
+}, true);
 
 /* Re-render when the date changes (app left open overnight) and sync when back online. */
 let lastDay = today();
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !store.mode) return;
-  if (today() !== lastDay) { lastDay = today(); render(); }
+  if (today() !== lastDay) {
+    const oldMonth = monthKey(lastDay), newMonth = monthKey(today());
+    lastDay = today();
+    if (oldMonth !== newMonth) {
+      // Screens that were on "this month" move to the new month.
+      if (ui.month === oldMonth) ui.month = newMonth;
+      if (ui.tx.month === oldMonth) ui.tx.month = newMonth;
+      if (ui.calMonth === oldMonth) ui.calMonth = newMonth;
+    }
+    render();
+  }
   if (store.mode === 'cloud') store.syncNow({ pull: true });
 });
 window.addEventListener('online', () => { if (store.mode === 'cloud') store.syncNow({ pull: true }); });

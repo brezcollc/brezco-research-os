@@ -67,6 +67,17 @@ class Store {
   subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   emit(reason) { for (const fn of this.listeners) fn(reason); }
 
+  static readNamespace(ns) {
+    const raw = safeGet(`${ns}.data`);
+    if (!raw) return null;
+    try {
+      const d = JSON.parse(raw), out = emptyState();
+      for (const c of COLLECTIONS) out[c] = Array.isArray(d[c]) ? d[c] : [];
+      out.settings = { ...out.settings, ...(d.settings || {}) };
+      return out;
+    } catch { return null; }
+  }
+
   static savedMode() { try { return JSON.parse(safeGet(MODE_KEY) || 'null'); } catch { return null; } }
   static hasLocalData() { return !!safeGet(`${PREFIX}.local.data`); }
 
@@ -122,7 +133,17 @@ class Store {
       if (pull) {
         const remote = await cloud.pullAll(this.user.id);
         const remoteEmpty = COLLECTIONS.every(c => remote[c].length === 0);
-        const localHas = COLLECTIONS.some(c => this.state[c].length > 0);
+        let localHas = COLLECTIONS.some(c => this.state[c].length > 0);
+        if (remoteEmpty && !localHas) {
+          // Brand-new account: bring along anything entered in device-only mode.
+          const dev = Store.readNamespace(`${PREFIX}.local`);
+          if (dev && COLLECTIONS.some(c => dev[c].length > 0)) {
+            for (const c of COLLECTIONS) this.state[c] = dev[c];
+            this.state.settings = { ...this.state.settings, ...dev.settings };
+            localHas = true;
+            this.sync.migratedFromDevice = true;
+          }
+        }
         if (remoteEmpty && localHas) {
           // First sync of this account from this device: upload what we have.
           this.queueAll();
@@ -138,7 +159,7 @@ class Store {
           if (remote.settings && !pending.has('settings|settings')) this.state.settings = { ...emptyState().settings, ...remote.settings };
         }
       }
-      this.sync = { status: 'synced', error: null, lastSync: nowISO(), setupRequired: false };
+      this.sync = { status: 'synced', error: this.sync.error && /rejected/.test(this.sync.error) ? this.sync.error : null, lastSync: nowISO(), setupRequired: false, migratedFromDevice: this.sync.migratedFromDevice };
     } catch (e) {
       const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
       this.sync = {
@@ -170,10 +191,13 @@ class Store {
     if (this.mode !== 'cloud' || !this.outbox.length) return;
     const batch = this.outbox.slice();
     try {
-      await (await this.mod()).cloud.push(batch, this.user.id);
+      const res = await (await this.mod()).cloud.push(batch, this.user.id);
       const sent = new Set(batch);
       this.outbox = this.outbox.filter(o => !sent.has(o));
-      this.sync = { ...this.sync, status: 'synced', error: null, lastSync: nowISO() };
+      const rejected = res?.rejected || [];
+      this.sync = { ...this.sync, status: 'synced', lastSync: nowISO(),
+        error: rejected.length ? `${rejected.length} change${rejected.length === 1 ? ' was' : 's were'} rejected by the server (${rejected[0].error}). They're still saved on this device.` : null };
+      if (rejected.length) console.warn('rejected by server', rejected);
     } catch (e) {
       this.sync = { ...this.sync, status: navigator.onLine === false ? 'offline' : 'error', error: e.message };
       if (throwOnError) throw e;

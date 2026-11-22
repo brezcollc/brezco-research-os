@@ -24,4 +24,5 @@ export const ui = {
   showAllInsights: false,
   dismissSetup: false,
   txLimit: 250,
+  openDetails: new Set(),
 };

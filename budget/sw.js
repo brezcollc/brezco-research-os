@@ -1,6 +1,6 @@
 /* sw.js — offline support. App files: network-first (always fresh when online,
    cached copy when offline). Pinned CDN modules: cache-first. */
-const VERSION = 'runway-v1.0.0';
+const VERSION = 'runway-v1.0.1';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/ctx.js', './js/store.js', './js/cloud.js', './js/config.js', './js/engine.js',

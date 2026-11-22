@@ -23,6 +23,24 @@ const P = {
 export const icon = (name, cls = '') =>
   `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`;
 
+/* ---------- keyboard tracking (iOS) ----------
+   On iPhone the on-screen keyboard shrinks the *visual* viewport but fixed elements
+   stay put, so a bottom sheet's Save button ends up behind the keyboard. We lift the
+   sheet by the keyboard height and cap its height to the visible area. */
+if (typeof window !== 'undefined' && window.visualViewport) {
+  const vv = window.visualViewport;
+  const sync = () => {
+    const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    const root = document.documentElement;
+    root.style.setProperty('--kb', `${kb}px`);
+    root.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+    root.classList.toggle('kb-open', kb > 80);
+  };
+  vv.addEventListener('resize', sync);
+  vv.addEventListener('scroll', sync);
+  sync();
+}
+
 /* ---------- sheets ---------- */
 const stack = [];
 export function openSheet(html, { onMount, onClose, id } = {}) {

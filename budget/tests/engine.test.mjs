@@ -353,3 +353,49 @@ test('history: past months report actuals and savings rate', () => {
   assert.equal(oct.cash, null);
   assert.equal(oct.bills.committedCents, 0);            // past months don't create commitments
 });
+
+/* ---------- regressions found in review ---------- */
+test('a cash shortfall is not hidden by the "no budgets yet" state', () => {
+  const s = baseState({ budgets: [], settings: { balanceCents: 50000, balanceDate: '2026-11-01', balanceSetAt: '2026-11-01T08:00:00Z', bufferCents: 0 } });
+  const m = computeMonth(s, '2026-11', '2026-11-03');
+  assert.equal(m.status, 'over');
+  assert.equal(m.statusReason, 'cash');
+});
+
+test('"this week" respects the cash-only limit before payday', () => {
+  // $600 balance, rent paid, phone ($80) due before the Nov 20 payday, big budget remaining.
+  const s = baseState({ settings: { balanceCents: 60000, balanceDate: '2026-11-15', balanceSetAt: '2026-11-15T08:00:00Z', bufferCents: 0 },
+    budgets: [budget('groceries', '2026-01', 200000)] });
+  s.bills[1] = { ...s.bills[1], dayOfMonth: 17 };
+  s.transactions = [tx('2026-11-01', 150000, 'housing', { billId: 'rent', billDate: '2026-11-01' }), pay('2026-11-06', 200000)];
+  const m = computeMonth(s, '2026-11', '2026-11-15');
+  const u = m.cash.untilPay;
+  assert.equal(u.days, 5);
+  assert.equal(u.perDay, divFloor(60000 - 8000, 5));
+  // 5 days at the cash limit + 2 days at the month rate
+  assert.equal(m.cash.perWeek, Math.min(m.cash.safeMonth, u.perDay * 5 + m.cash.perDayMonth * 2));
+  assert.ok(m.cash.perWeek < m.cash.perDayMonth * 7);
+});
+
+test('cash flow: savings with no paycheck left this month are deducted once and stay deducted', () => {
+  const s = baseState({ settings: { balanceCents: 500000, balanceDate: '2026-11-21', balanceSetAt: '2026-11-21T08:00:00Z', bufferCents: 0 },
+    incomeSources: [{ id: 'job', name: 'Paycheck', kind: 'paycheck', amountCents: 200000, frequency: 'monthly', anchorDate: '2026-01-01', dayOfMonth: 1 }],
+    bills: [] , budgets: [budget('savings', '2026-01', 50000)] });
+  s.transactions = [pay('2026-11-01', 200000)];
+  const cf = cashFlow(s, '2026-11-25', 20);
+  assert.equal(cf.upfrontSavings, 50000);
+  const nov30 = cf.series.find(p => p.date === '2026-11-30');
+  const dec2 = cf.series.find(p => p.date === '2026-12-02');
+  assert.equal(nov30.expected, 450000);
+  assert.equal(dec2.expected, 450000 + 200000); // Dec 1 paycheck added; savings NOT given back
+});
+
+test('cash flow: the last paycheck of the month covers all remaining savings', () => {
+  const s = baseState({ settings: { balanceCents: 100000, balanceDate: '2026-11-15', balanceSetAt: '2026-11-15T08:00:00Z', bufferCents: 0 },
+    bills: [], budgets: [budget('savings', '2026-01', 50000)] });
+  s.incomeSources[0].amountCents = 30000; // paycheck smaller than the savings target
+  s.transactions = [pay('2026-11-06', 30000)];
+  const cf = cashFlow(s, '2026-11-15', 10);
+  const nov20 = cf.series.find(p => p.date === '2026-11-20');
+  assert.equal(nov20.expected, 100000 + 30000 - 50000);
+});
