@@ -81,6 +81,8 @@ export function dashboard() {
 
   /* ---- discretionary ring ---- */
   const v = m.variable;
+  const nothingYet = v.budget === 0 && v.spent === 0 && m.plannedSpend === 0 && m.spending.totalSpent === 0;
+  if (!nothingYet) {
   const vTone = toneOf(v.status) === 'muted' ? 'good' : toneOf(v.status);
   h += `<section class="card" data-act="tab" data-tab="budget" style="cursor:pointer">
     <div class="card-h"><h2>Discretionary budget</h2><span class="link">Details ›</span></div>
@@ -96,6 +98,7 @@ export function dashboard() {
     </div>
     <p class="explain">${v.budget ? (v.spent > v.budget ? `You're ${fmt(v.spent - v.budget)} over your discretionary budget.` : `${fmt(v.budget - v.spent)} of discretionary budget left for ${m.remainingDays} day${m.remainingDays === 1 ? '' : 's'}. The white tick shows where you'd be if spending were perfectly even.`) : 'Set budgets for categories like groceries and dining to track your pace.'}</p>
   </section>`;
+  }
 
   /* ---- stats ---- */
   h += `<div class="grid2">
@@ -116,7 +119,7 @@ export function dashboard() {
   /* ---- spending vs plan ---- */
   const plannedTotal = m.plannedSpend;
   const committed = m.spending.totalSpent + m.bills.committedCents;
-  h += `<section class="card">
+  if (!nothingYet) h += `<section class="card">
     <div class="card-h"><h2>Spending vs. monthly budget</h2><span class="muted num" style="font-size:13px">${fmt(m.spending.totalSpent)} / ${fmt(plannedTotal)}</span></div>
     ${barHTML(plannedTotal ? m.spending.totalSpent / plannedTotal : 0, m.elapsedShare, m.spending.totalSpent > plannedTotal ? 'danger' : 'good', true)}
     <div class="kv" style="margin-top:10px"><span class="k">Already spent</span><span class="v num">${fmt(m.spending.totalSpent)}</span></div>
@@ -150,7 +153,7 @@ export function dashboard() {
 
   /* ---- how it's calculated ---- */
   if (c) {
-    h += `<details class="card"><summary style="font-weight:650;cursor:pointer;list-style:none;display:flex;justify-content:space-between">How “safe to spend” is calculated <span class="muted">›</span></summary>
+    h += `<details class="card" data-key="calc" ${ui.openDetails?.has('calc') ? 'open' : ''}><summary style="font-weight:650;cursor:pointer;list-style:none;display:flex;justify-content:space-between">How “safe to spend” is calculated <span class="muted">›</span></summary>
       <div style="margin-top:12px">
       <div class="kv"><span class="k">Actual balance (confirmed)</span><span class="v num">${fmt(c.balanceNow)}</span></div>
       <div class="kv"><span class="k">+ Expected income still to come</span><span class="v num good">${fmt(m.income.pendingCents)}</span></div>

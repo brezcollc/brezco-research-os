@@ -80,8 +80,9 @@ treated as already included.
 
 ## Tests
 ```bash
-node --test budget/tests/engine.test.mjs   # 21 financial-scenario tests
+node --test budget/tests/*.test.mjs        # 21 financial scenarios + 6 sync tests
 node budget/tests/ui.e2e.cjs               # 15-step Playwright run at iPhone size
+node budget/tests/ui.cloud.e2e.cjs         # sign-in + sync against a fake Supabase (tests/fake-supabase.js)
 ```
 The scenarios cover: biweekly pay with three-paycheck months, bills due on the 31st (Feb 28/29,
 Apr 30), twice-monthly pay with weekend adjustment, quarterly and yearly bills (including Feb 29),

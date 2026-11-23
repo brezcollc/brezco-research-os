@@ -288,7 +288,12 @@ export function computeMonth(state, mk, today) {
     }
     const perDayMonth = divFloor(safeMonth, remainingDays);
     const perDay = untilPay ? Math.min(perDayMonth, untilPay.perDay) : perDayMonth;
-    const perWeek = Math.min(safeMonth, perDayMonth * Math.min(7, remainingDays));
+    // Next 7 days (or to month end): days before payday are held to the cash-only limit.
+    let perWeek = 0;
+    for (let i = 0; i < Math.min(7, remainingDays); i++) {
+      perWeek += untilPay && i < untilPay.days ? perDay : perDayMonth;
+    }
+    perWeek = Math.min(safeMonth, perWeek);
     cash = {
       balanceNow, monthCapacity, safeMonth, limitedBy, perDay, perDayMonth, perWeek, untilPay,
       tightBeforePayday: !!(untilPay && untilPay.perDay < perDayMonth),
@@ -324,7 +329,7 @@ export function computeMonth(state, mk, today) {
   if (phase === 'current' && cash) {
     if (cash.monthCapacity < 0 || (cash.untilPay && cash.untilPay.shortfall > 0)) { status = 'over'; statusReason = 'cash'; }
   }
-  if (phase === 'current' && variableBudget === 0 && variableSpent === 0) status = 'idle';
+  if (phase === 'current' && variableBudget === 0 && variableSpent === 0 && statusReason !== 'cash') status = 'idle';
 
   const snap = {
     month: mk, today, phase, dim, dayOfMonth, remainingDays, elapsedShare: dim ? dayOfMonth / dim : 0,
@@ -377,18 +382,24 @@ export function cashFlow(state, today, days = 42) {
     }
     return allowance.get(mk);
   };
-  // Savings transfers still planned this month: assume they go out with the next paycheck.
+  // Savings still planned this month go out with this month's remaining paychecks; with
+  // no paycheck left this month they come out of today's balance.
   const cur = computeMonth(state, monthKey(today), today);
   let savingsLeft = cur.savings.remaining;
+  const curMonth = monthKey(today);
 
   const events = [];
   for (const o of inc) events.push({ date: o.date < today ? today : o.date, origDate: o.date, type: 'income', name: o.name, amountCents: o.expectedCents, overdue: o.date < today, ref: o });
   for (const o of bills) events.push({ date: o.date < today ? today : o.date, origDate: o.date, type: 'bill', name: o.name, amountCents: -o.amountCents, overdue: o.date < today, ref: o });
   events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.type === 'income' ? -1 : 1));
+  const monthIncome = events.filter(e => e.type === 'income' && monthKey(e.date) === curMonth);
+  const lastMonthIncome = monthIncome[monthIncome.length - 1] || null;
+  let upfrontSavings = monthIncome.length ? 0 : savingsLeft;
+  if (upfrontSavings) savingsLeft = 0;
 
   const series = [];
   if (bal === null) return { hasBalance: false, series, events, buffer };
-  let confirmed = bal, expected = bal, planned = bal;
+  let confirmed = bal, expected = bal - upfrontSavings, planned = bal - upfrontSavings;
   let low = { planned: Infinity, date: null }, firstShort = null, firstBelowBuffer = null;
   let ei = 0;
   for (let i = 0; i < days; i++) {
@@ -399,8 +410,9 @@ export function cashFlow(state, today, days = 42) {
       if (e.type === 'bill') { confirmed += e.amountCents; expected += e.amountCents; planned += e.amountCents; }
       else {
         expected += e.amountCents; planned += e.amountCents;
-        if (savingsLeft > 0 && monthKey(d) === monthKey(today)) {
-          const take = Math.min(savingsLeft, e.amountCents);
+        if (savingsLeft > 0 && monthKey(d) === curMonth) {
+          // The month's last paycheck covers whatever savings are still outstanding.
+          const take = e === lastMonthIncome ? savingsLeft : Math.min(savingsLeft, e.amountCents);
           savingsLeft -= take; expected -= take; planned -= take;
           e.savingsTaken = take;
         }
@@ -413,10 +425,6 @@ export function cashFlow(state, today, days = 42) {
     if (firstShort === null && planned < 0) firstShort = d;
     if (firstBelowBuffer === null && planned < buffer) firstBelowBuffer = d;
   }
-  if (savingsLeft > 0) {
-    // No paycheck left this month to fund savings from: take it from today's balance.
-    for (const p of series) if (monthKey(p.date) === monthKey(today)) { p.expected -= savingsLeft; p.planned -= savingsLeft; }
-  }
   const pay = nextPayday(state, today);
   let lowBeforePay = null;
   if (pay) {
@@ -425,7 +433,7 @@ export function cashFlow(state, today, days = 42) {
       if (!lowBeforePay || p.planned < lowBeforePay.planned) lowBeforePay = p;
     }
   }
-  return { hasBalance: true, start: bal, series, events, low, firstShort, firstBelowBuffer, buffer, payday: pay, lowBeforePay };
+  return { hasBalance: true, start: bal, upfrontSavings, series, events, low, firstShort, firstBelowBuffer, buffer, payday: pay, lowBeforePay };
 }
 
 /* ---------------- Income projection ---------------- */
