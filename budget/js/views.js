@@ -9,7 +9,7 @@ import {
 } from './dates.js';
 import { describeRule, nextOccurrence } from './schedule.js';
 import {
-  computeMonth, headline, STATUS, categoryIndex, incomeSummary, goalProgress, cashFlow,
+  computeMonth, headline, STATUS, categoryIndex, incomeSummary, goalProgress, cashFlow, sweepAmount,
   categoryBreakdown, monthlyEquivalent, budgetFor, billOccurrences, incomeOccurrences,
 } from './engine.js';
 import { ring, donut, bars, lines } from './charts.js';
@@ -61,11 +61,12 @@ export function dashboard() {
   let h = topbar(greet, `${fmtDateDow(t)} · Day ${m.dayOfMonth} of ${m.dim}`, `${syncDot()}<button class="icon-btn" data-act="tab" data-tab="settings" aria-label="Settings">${icon('gear')}</button>`);
 
   h += setupCard(st, m);
+  h += savingsHero(st, m);
 
   /* ---- hero ---- */
   const c = m.cash;
   const tone = m.status === 'over' ? 'danger' : m.status === 'fast' ? 'warn' : '';
-  h += `<section class="card hero ${tone ? `tone-${tone}` : ''}">
+  h += `<section class="card hero ${m.saving?.hasIncome ? 'second' : ''} ${tone ? `tone-${tone}` : ''}">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
       <span class="eyebrow">Safe to spend today</span>${pill(m.status)}
     </div>`;
@@ -171,10 +172,39 @@ export function dashboard() {
   return h;
 }
 
+const SAVE_STATUS = { ahead: ['AHEAD OF TARGET', ''], on_target: ['ON TARGET', ''], behind: ['BELOW TARGET', 'warn'] };
+function savingsHero(st, m) {
+  const sv = m.saving;
+  if (!sv || !sv.hasIncome) return '';
+  const pct = sv.targetPct;
+  const [label, tone] = sv.status ? SAVE_STATUS[sv.status] : [null, ''];
+  const goalCents = sv.target ?? Math.max(sv.kept, 1);
+  const movedShare = Math.max(0, Math.min(1, sv.moved / goalCents));
+  const keptShare = Math.max(0, Math.min(1, sv.kept / goalCents));
+  let say;
+  if (sv.kept < 0) say = `At this pace you'll spend ${fmt(-sv.kept)} more than you take home this month. Pull back on discretionary spending.`;
+  else if (sv.status === 'behind') say = `On pace to keep ${fmt(sv.kept)} — ${fmt(-sv.gap)} short of your ${pct}% target. Spending about ${fmt(sv.perDayCut)} less per day closes the gap.`;
+  else if (sv.status) say = `On pace to keep ${fmt(sv.kept)}${sv.gap > 0 ? ` — ${fmt(sv.gap)} more than` : ', right at'} your ${pct}% target. Move it to savings as it comes in.`;
+  else say = `On pace to keep ${fmt(sv.kept)} of ${fmt(sv.income)} take-home this month.`;
+  return `<section class="card hero save ${tone ? `tone-${tone}` : ''}">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <span class="eyebrow">Saving this month</span>${label ? `<span class="pill ${tone}">${label}</span>` : `<button class="pill plain muted" data-act="editTarget">Set a target</button>`}
+    </div>
+    <div class="big">${big(sv.kept)}</div>
+    <div class="meta"><span><b>${Math.round(sv.rate * 100)}%</b> of take-home</span>${sv.target !== null ? `<span>Target <b>${pct}%</b> = <b class="num">${fmt(sv.target, { showCents: false })}</b></span>` : ''}</div>
+    <div style="margin-top:14px">${`<div class="bar thick"><i style="width:${keptShare * 100}%;opacity:.35"></i><i style="width:${movedShare * 100}%"></i></div>`}</div>
+    <div class="meta" style="margin-top:8px"><span><i class="dot" style="background:var(--green)"></i> <b class="num">${fmt(sv.moved)}</b> moved</span><span><i class="dot" style="background:var(--green);opacity:.4"></i> ${fmt(sv.toMove)} still to move</span></div>
+    <p class="say">${esc(say)}</p>
+    <div class="btn-row" style="margin-top:12px"><button class="btn sm primary" data-act="moveMoney">Move to savings</button><button class="btn sm" data-act="openSeg" data-seg="goals">Savings plan</button></div>
+  </section>`;
+}
+
 function insightHTML(i) {
   const mark = { danger: '!', warn: '!', info: 'i', good: '✓' }[i.level];
   let acts = '';
   if (i.action?.type === 'payBill') acts = `<div class="acts"><button class="btn xs primary" data-act="payBill" data-bill="${i.action.billId}" data-date="${i.action.date}">Mark paid</button></div>`;
+  if (i.action?.type === 'moveTransfer') acts = `<div class="acts"><button class="btn xs primary" data-act="moveTransfer" data-bill="${i.action.billId}" data-date="${i.action.date}">Moved it</button></div>`;
+  if (i.action?.type === 'sweep') acts = `<div class="acts"><button class="btn xs primary" data-act="sweep">Move it to savings</button></div>`;
   if (i.action?.type === 'receiveIncome') acts = `<div class="acts"><button class="btn xs primary" data-act="receiveIncome" data-source="${i.action.sourceId}" data-date="${i.action.date}">Yes, it arrived</button></div>`;
   const tap = i.categoryId && i.categoryId !== '_uncat' ? ` data-act="openCategory" data-id="${i.categoryId}" style="cursor:pointer"` : '';
   return `<div class="insight ${i.level}"${tap}><div class="mark">${mark}</div><div><div class="t">${esc(i.title)}</div><div class="b">${esc(i.body)}</div>${acts}</div></div>`;
@@ -199,7 +229,8 @@ function setupCard(st, m) {
 function upcomingCard(st, m, t) {
   const pay = m.cash?.untilPay?.payday || null;
   const horizon = addDays(t, 21);
-  const bills = billOccurrences(st, monthStart(monthKey(t)), horizon).filter(o => !o.paid).slice(0, 6);
+  const idx0 = categoryIndex(st);
+  const bills = billOccurrences(st, monthStart(monthKey(t)), horizon).filter(o => !o.paid).slice(0, 7);
   if (!pay && !bills.length) return '';
   let h = `<div class="section-title">Coming up</div><section class="card">`;
   if (pay) {
@@ -212,10 +243,14 @@ function upcomingCard(st, m, t) {
       : `After ${u.billsDue.length ? `${u.billsDue.length} bill${u.billsDue.length === 1 ? '' : 's'} due before payday (${fmt(u.billsDueCents)})` : 'upcoming bills'}, you'll have <b class="num">${fmt(Math.max(0, u.freeCents))}</b> free until your paycheck — about ${fmt(u.perDay)}/day.`}</div>`;
   }
   if (bills.length) {
-    h += `<div style="margin:8px -16px -16px">${bills.map(o => `<div class="row-item"><div class="ico">${catIcon(categoryIndex(st), o.categoryId)}</div>
-      <div class="main"><div class="title">${esc(o.name)}</div><div class="subt ${o.date < t ? 'warn' : ''}">${o.date < t ? `Overdue · was due ${fmtDate(o.date)}` : `Due ${relDayFull(o.date, t)}`}${o.bill.autopay ? ' · Autopay' : ''}</div></div>
-      <div class="amt num">${fmt(o.amountCents)}</div>
-      <button class="btn xs" data-act="payBill" data-bill="${o.billId}" data-date="${o.date}">Pay</button></div>`).join('')}</div>`;
+    h += `<div style="margin:8px -16px -16px">${bills.map(o => {
+      const xfer = idx0.kindOf(o.categoryId) === 'savings';
+      return `<div class="row-item"><div class="ico">${xfer ? '🏦' : catIcon(idx0, o.categoryId)}</div>
+      <div class="main"><div class="title">${esc(o.name)}</div><div class="subt ${o.date < t ? 'warn' : ''}">${xfer ? `<span class="info">Pay yourself first</span> · ` : ''}${o.date < t ? `${xfer ? 'Was' : 'Overdue · was'} due ${fmtDate(o.date)}` : `${xfer ? '' : 'Due '}${relDayFull(o.date, t)}`}${o.bill.autopay ? ' · Autopay' : ''}</div></div>
+      <div class="amt num ${xfer ? 'info' : ''}">${fmt(o.amountCents)}</div>
+      ${xfer ? (o.date <= t ? `<button class="btn xs primary" data-act="moveTransfer" data-bill="${o.billId}" data-date="${o.date}">Moved it</button>` : '')
+        : `<button class="btn xs" data-act="payBill" data-bill="${o.billId}" data-date="${o.date}">Pay</button>`}</div>`;
+    }).join('')}</div>`;
   }
   h += `</section><button class="btn block ghost" data-act="openSeg" data-seg="cashflow" style="margin-top:-4px;color:var(--green)">${icon('cal')} Open cash-flow calendar</button>`;
   return h;
@@ -285,12 +320,12 @@ export function txRow(t, idx) {
 /* ====================================================================== */
 /* BUDGET                                                                 */
 /* ====================================================================== */
-const SEGS = [['spending', 'Spending'], ['bills', 'Bills'], ['income', 'Income'], ['goals', 'Goals'], ['cashflow', 'Cash flow']];
+const SEGS = [['spending', 'Spending'], ['bills', 'Bills'], ['income', 'Income'], ['goals', 'Saving'], ['cashflow', 'Cash flow']];
 
 export function budget() {
   const seg = ui.seg;
   const right = seg === 'goals' || seg === 'cashflow' ? '' : monthNav(ui.month);
-  let h = topbar('Budget', seg === 'cashflow' ? 'Next 6 weeks' : seg === 'goals' ? 'Savings & goals' : fmtMonth(ui.month), right);
+  let h = topbar('Budget', seg === 'cashflow' ? 'Next 6 weeks' : seg === 'goals' ? 'Pay yourself first' : fmtMonth(ui.month), right);
   h += `<div class="seg">${SEGS.map(([k, l]) => `<button class="${seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${l}</button>`).join('')}</div>`;
   if (seg === 'spending') h += spendingSeg();
   if (seg === 'bills') h += billsSeg();
@@ -359,9 +394,10 @@ function catRowHTML(l, m) {
 
 function billsSeg() {
   const st = S(), t = today(), mk = ui.month, idx = categoryIndex(st);
-  const occ = billOccurrences(st, monthStart(mk), monthEnd(mk));
+  const isXfer = b => idx.kindOf(b.categoryId) === 'savings';
+  const occ = billOccurrences(st, monthStart(mk), monthEnd(mk)).filter(o => !isXfer(o.bill));
   const paid = occ.filter(o => o.paid), due = occ.filter(o => !o.paid);
-  const monthlyEq = sum(st.bills.filter(b => b.active !== false), b => monthlyEquivalent(b));
+  const monthlyEq = sum(st.bills.filter(b => b.active !== false && !isXfer(b)), b => monthlyEquivalent(b));
   let h = `<div class="grid2">
     <div class="stat"><div class="label">Bills in ${fmtMonthShort(mk)}</div><div class="value num">${fmt(sum(occ, o => o.paid ? o.tx.amountCents : o.amountCents))}</div><div class="foot">${occ.length} payments</div></div>
     <div class="stat"><div class="label">${mk < monthKey(t) ? 'Unpaid' : 'Still due'}</div><div class="value num ${due.some(o => o.date < t) ? 'warn' : ''}">${fmt(sum(due, o => o.amountCents))}</div><div class="foot">${paid.length} paid · ${due.length} open</div></div></div>`;
@@ -375,7 +411,7 @@ function billsSeg() {
         ${o.paid ? `<button class="icon-btn" data-act="editTx" data-id="${o.tx.id}" aria-label="Edit payment">${icon('edit')}</button>` : `<button class="btn xs primary" data-act="payBill" data-bill="${o.billId}" data-date="${o.date}">Pay</button>`}</div>`;
     }).join('')}</div>`;
   } else h += `<div class="card empty"><div class="e">🧾</div><h3>No bills this month</h3><p>Add rent, utilities, phone, insurance, subscriptions and loan payments.</p></div>`;
-  const all = st.bills.slice().sort((a, b) => (a.active === false) - (b.active === false) || a.name.localeCompare(b.name));
+  const all = st.bills.filter(b => !isXfer(b)).sort((a, b) => (a.active === false) - (b.active === false) || a.name.localeCompare(b.name));
   if (all.length) {
     h += `<div class="section-title">All recurring bills</div><div class="list">${all.map(b => {
       const n = b.active === false ? null : nextOccurrence(b, t);
@@ -431,7 +467,49 @@ function incomeSeg() {
 function goalsSeg() {
   const st = S(), t = today();
   const goals = st.goals.filter(g => !g.archived);
+  const m = computeMonth(st, monthKey(t), t);
+  const sv = m.saving;
+  const idx = categoryIndex(st);
   let h = '';
+  // Target
+  const pct = st.settings.prefs?.savingsTargetPct;
+  h += `<section class="card"><div class="card-h"><h2>Savings target</h2><button class="link" data-act="editTarget">${pct ? 'Edit' : 'Set'}</button></div>`;
+  if (!pct) h += `<p class="muted" style="margin:0 0 12px;line-height:1.5">Pick what share of take-home you want to keep. The dashboard then tells you every day whether you're on pace.</p><button class="btn sm primary" data-act="editTarget">Set a savings target</button>`;
+  else if (sv?.hasIncome) h += `<div class="num" style="font-size:28px;font-weight:740">${pct}% <span class="muted" style="font-size:15px;font-weight:600">of take-home · ${fmt(sv.target)} this month</span></div>
+      <div class="kv" style="margin-top:8px"><span class="k">Expected take-home</span><span class="v num">${fmt(sv.income)}</span></div>
+      <div class="kv"><span class="k">On pace to keep</span><span class="v num ${sv.gap < 0 ? 'warn' : 'good'}">${fmt(sv.kept)} (${Math.round(sv.rate * 100)}%)</span></div>
+      <div class="kv"><span class="k">Moved to savings so far</span><span class="v num info">${fmt(sv.moved)}</span></div>`;
+  else h += `<div class="num" style="font-size:28px;font-weight:740">${pct}% <span class="muted" style="font-size:15px">of take-home</span></div><p class="explain">Add your paycheck to see this month's target in dollars.</p>`;
+  h += `</section>`;
+  // Pay yourself first
+  const xfers = st.bills.filter(b => idx.kindOf(b.categoryId) === 'savings');
+  const occ = m.transfers.occurrences;
+  h += `<div class="section-title">Scheduled transfers</div>`;
+  if (xfers.length) {
+    h += `<div class="list">${xfers.map(b => {
+      const mine = occ.filter(o => o.billId === b.id);
+      const doneN = mine.filter(o => o.paid).length;
+      const dueNow = mine.find(o => !o.paid && o.date <= t);
+      const nextUp = mine.find(o => !o.paid && o.date > t);
+      const src = st.settings.prefs?.billSources?.[b.id] && st.incomeSources.find(x => x.id === st.settings.prefs.billSources[b.id]);
+      return `<div class="row-item" style="${b.active === false ? 'opacity:.5' : ''}"><div class="ico">🏦</div>
+        <button class="main" data-act="editTransfer" data-id="${b.id}" style="text-align:left"><div class="title">${esc(b.name)}</div>
+          <div class="subt">${src ? 'Every payday' : esc(describeRule(b))}${mine.length ? ` · ${doneN}/${mine.length} done this month` : ''}${!dueNow && nextUp ? ` · next ${fmtDate(nextUp.date)}` : ''}</div></button>
+        <div class="amt num info">${fmt(b.amountCents)}</div>
+        ${dueNow ? `<button class="btn xs primary" data-act="moveTransfer" data-bill="${b.id}" data-date="${dueNow.date}">Moved it</button>` : ''}</div>`;
+    }).join('')}</div>`;
+  } else {
+    h += `<div class="card"><p class="muted" style="margin:0;line-height:1.5">Schedule a transfer to savings or investing on every payday. It's set aside before anything counts as safe to spend, so saving happens first, not with whatever's left.</p></div>`;
+  }
+  h += `<button class="btn block primary" data-act="newTransfer" style="margin-bottom:12px">${icon('plus')} Schedule a transfer</button>`;
+  // Sweep
+  const sw = m.remainingDays <= 5 ? sweepAmount(m) : 0; // only near month end: earlier it isn't "leftover" yet
+  if (sw >= 100) {
+    h += `<section class="card"><div class="card-h"><h2>Unspent this month</h2><span class="num good" style="font-weight:700">${fmt(sw)}</span></div>
+      <p class="explain" style="margin-top:0">Left in your discretionary budgets and backed by cash. Moving it now means it gets saved instead of spent.</p>
+      <button class="btn sm" data-act="sweep" style="margin-top:10px">Move ${fmt(sw)} to savings</button></section>`;
+  }
+  h += `<div class="section-title">Goals</div>`;
   if (!goals.length) {
     h += `<div class="card empty"><div class="e">🎯</div><h3>Set a savings goal</h3><p>Emergency fund, a trip, a big purchase — see exactly how much to set aside from each paycheck.</p></div>`;
   }
@@ -455,8 +533,7 @@ function goalsSeg() {
     h += `<div class="btn-row" style="margin-top:12px"><button class="btn sm primary" data-act="contribute" data-id="${g.id}">Add money</button><button class="btn sm" data-act="goalHistory" data-id="${g.id}">History</button></div></section>`;
   }
   // Emergency fund suggestion
-  const fixedMonthly = sum(st.bills.filter(b => b.active !== false), b => monthlyEquivalent(b));
-  const idx = categoryIndex(st);
+  const fixedMonthly = sum(st.bills.filter(b => b.active !== false && idx.kindOf(b.categoryId) !== 'savings'), b => monthlyEquivalent(b));
   const groceries = idx.roots.find(c => /grocer/i.test(c.name));
   const essentials = fixedMonthly + (groceries ? budgetFor(st, groceries.id, monthKey(t)) : 0);
   if (essentials > 0 && !goals.some(g => /emergency/i.test(g.name))) {
@@ -679,9 +756,11 @@ export function analytics() {
   const avg = valid.length ? valid.reduce((a, x) => a + x.rate, 0) / valid.length : null;
   const selSR = ui.chartSel.sr ?? null;
   h += `<section class="card"><div class="card-h"><h2>Savings rate</h2>${avg !== null ? `<span class="chip ${avg >= 0.2 ? 'good' : avg >= 0.1 ? '' : 'warn'}">avg ${Math.round(avg * 100)}%</span>` : ''}</div>
-    ${bars({ chartId: 'sr', sel: selSR, height: 150, fmtY: v => `${Math.round(v / 10)}%`, groups: six.map((x, i) => ({ label: x.label, values: [Math.max(0, rates[i])] })), series: [{ name: 'Rate', color: '#2fd18b' }] })}
+    ${bars({ chartId: 'sr', sel: selSR, height: 150, fmtY: v => `${Math.round(v / 10)}%`, groups: six.map((x, i) => ({ label: x.label, values: [Math.max(0, rates[i])] })), series: [{ name: 'Rate', color: '#2fd18b' }],
+      line: st.settings.prefs?.savingsTargetPct ? { color: '#f5b84b', values: six.map(() => st.settings.prefs.savingsTargetPct * 10) } : null })}
+    ${st.settings.prefs?.savingsTargetPct ? `<div class="chart-keys"><span><i class="dot" style="background:#2fd18b"></i>Kept</span><span><i class="dot" style="background:#f5b84b"></i>Your ${st.settings.prefs.savingsTargetPct}% target</span></div>` : ''}
     <div class="chart-tip">${(() => { const x = six[selSR ?? 5]; return x.rate === null ? `<b>${fmtMonth(x.k)}</b>: no income recorded.` : `<b>${fmtMonth(x.k)}</b>: you kept <b>${Math.round(x.rate * 100)}%</b> of take-home (${fmt(x.income - x.spent)} of ${fmt(x.income)}).`; })()}</div>
-    <p class="explain">Savings rate = share of take-home pay you didn't spend. 20%+ is a strong target.</p></section>`;
+    <p class="explain">Savings rate = share of take-home pay you didn't spend (money moved to savings or investing isn't spending).</p></section>`;
   return h;
 }
 
@@ -705,6 +784,7 @@ export function settings() {
   // money
   h += `<div class="section-title">Your money</div><div class="list">
     <button class="row-item" data-act="editBalance"><div class="ico">🏦</div><div class="main"><div class="title">Checking balance</div><div class="subt">${s.balanceDate ? `You set ${fmt(s.balanceCents)} on ${fmtDate(s.balanceDate)}${s.demoBalance ? ' (sample)' : ''}` : 'Not set'}</div></div><div class="amt num">${bal !== null ? fmt(bal) : '—'}<small>${bal !== null ? 'now' : ''}</small></div><span class="chev">${icon('chevR')}</span></button>
+    <button class="row-item" data-act="editTarget"><div class="ico">📈</div><div class="main"><div class="title">Savings target</div><div class="subt">Share of take-home to keep</div></div><div class="amt num">${s.prefs?.savingsTargetPct ? `${s.prefs.savingsTargetPct}%` : 'Not set'}</div><span class="chev">${icon('chevR')}</span></button>
     <button class="row-item" data-act="editBuffer"><div class="ico">🛟</div><div class="main"><div class="title">Safety buffer</div><div class="subt">Kept aside, never counted as spendable</div></div><div class="amt num">${fmt(s.bufferCents || 0)}</div><span class="chev">${icon('chevR')}</span></button>
     <button class="row-item" data-act="openSeg" data-seg="income"><div class="ico">💼</div><div class="main"><div class="title">Income & paydays</div><div class="subt">${st.incomeSources.length} source${st.incomeSources.length === 1 ? '' : 's'}</div></div><span class="chev">${icon('chevR')}</span></button>
     <button class="row-item" data-act="openSeg" data-seg="bills"><div class="ico">🧾</div><div class="main"><div class="title">Recurring bills</div><div class="subt">${st.bills.length} bill${st.bills.length === 1 ? '' : 's'}</div></div><span class="chev">${icon('chevR')}</span></button>

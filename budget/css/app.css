@@ -101,6 +101,9 @@ html, body { overflow-x: hidden; max-width: 100%; }
 .hero .big .cents { font-size: 26px; color: var(--muted); font-weight: 650; }
 .hero .meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
 .hero .meta b { color: var(--text); font-weight: 650; }
+.hero.second .big { font-size: 36px; }
+.hero.save .bar > i:first-child { background: var(--green); }
+.hero .meta .dot { vertical-align: middle; margin-right: 2px; }
 .hero .say { margin: 14px 0 0; font-size: 14.5px; line-height: 1.45; color: #cfd8e6; }
 .pill {
   display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 750; letter-spacing: 0.07em;

@@ -399,3 +399,102 @@ test('cash flow: the last paycheck of the month covers all remaining savings', (
   const nov20 = cf.series.find(p => p.date === '2026-11-20');
   assert.equal(nov20.expected, 100000 + 30000 - 50000);
 });
+
+/* ---------- savings-first features ---------- */
+import { savingProjection, sweepAmount } from '../js/engine.js';
+
+test('pay-yourself-first transfers count as savings, not bills or spending', () => {
+  const s = baseState({ budgets: [budget('groceries', '2026-01', 60000), budget('restaurants', '2026-01', 40000)] });
+  // $250 to savings every payday (biweekly, same schedule as the paycheck)
+  s.bills.push({ id: 'xfer', name: 'Brokerage', categoryId: 'savings', amountCents: 25000, frequency: 'biweekly', anchorDate: '2026-11-06' });
+  s.transactions = [tx('2026-11-01', 150000, 'housing', { billId: 'rent', billDate: '2026-11-01' }), pay('2026-11-06', 200000),
+    tx('2026-11-06', 25000, 'savings', { billId: 'xfer', billDate: '2026-11-06' })];
+  const m = computeMonth(s, '2026-11', '2026-11-15');
+  assert.equal(m.bills.committedCents, 8000);           // only the phone bill
+  assert.equal(m.bills.plannedCents, 158000);           // rent + phone, no transfers
+  assert.equal(m.savings.plan, 50000);                  // 2 transfers scheduled this month
+  assert.equal(m.savings.done, 25000);
+  assert.equal(m.savings.remaining, 25000);
+  assert.equal(m.transfers.upcoming.length, 1);
+  assert.equal(m.spending.totalSpent, 150000);
+  // monthCapacity reserves the remaining transfer once (no double count)
+  assert.equal(m.cash.monthCapacity, m.cash.balanceNow + 200000 - 8000 - 25000);
+  // A three-paycheck month schedules three transfers
+  const jan = computeMonth(s, '2027-01', '2027-01-02');
+  assert.equal(jan.savings.plan, 75000);
+});
+
+test('cash flow does not deduct a scheduled transfer twice', () => {
+  const s = baseState({ budgets: [], settings: { balanceCents: 100000, balanceDate: '2026-11-15', balanceSetAt: '2026-11-15T08:00:00Z', bufferCents: 0 } });
+  s.bills = [{ id: 'xfer', name: 'Brokerage', categoryId: 'savings', amountCents: 25000, frequency: 'biweekly', anchorDate: '2026-11-06' }];
+  s.transactions = [pay('2026-11-06', 200000), tx('2026-11-06', 25000, 'savings', { billId: 'xfer', billDate: '2026-11-06' })];
+  const cf = cashFlow(s, '2026-11-15', 10);
+  const nov20 = cf.series.find(p => p.date === '2026-11-20');
+  assert.equal(nov20.expected, 100000 + 200000 - 25000);
+});
+
+test('saving more than planned reduces what is left to spend (month-end sweep)', () => {
+  const s = baseState();
+  s.transactions = [pay('2026-11-06', 200000), pay('2026-11-20', 200000), tx('2026-11-10', 20000, 'groceries'),
+    tx('2026-11-20', 50000, 'savings')];
+  const before = computeMonth(s, '2026-11', '2026-11-28');
+  assert.equal(before.variable.budgetRemaining, 80000);
+  const sweep = sweepAmount(before);
+  assert.equal(sweep, 80000);
+  s.transactions.push(tx('2026-11-28', sweep, 'savings', { merchant: 'Month-end sweep' }));
+  const after = computeMonth(s, '2026-11', '2026-11-28');
+  assert.equal(after.savings.extra, 80000);
+  assert.equal(after.variable.budgetRemaining, 0);
+  assert.equal(after.cash.safeMonth, 0);
+  assert.equal(sweepAmount(after), 0);
+});
+
+test('savings target projection: on pace vs behind, with a per-day fix', () => {
+  // Income $4,000 (2 paychecks), fixed $1,580, $500 discretionary spent by day 15 → pace $1,000.
+  const s = baseState({ settings: { balanceCents: 300000, balanceDate: '2026-10-31', balanceSetAt: '2026-10-31T23:00:00Z', bufferCents: 0, prefs: { savingsTargetPct: 30 } } });
+  s.transactions = [tx('2026-11-01', 150000, 'housing', { billId: 'rent', billDate: '2026-11-01' }), pay('2026-11-06', 200000),
+    tx('2026-11-03', 25000, 'restaurants'), tx('2026-11-08', 25000, 'groceries')];
+  const m = computeMonth(s, '2026-11', '2026-11-15');
+  const sv = m.saving;
+  assert.equal(sv.income, 400000);
+  assert.equal(sv.kept, 400000 - 150000 - 8000 - 100000);  // 142,000
+  assert.equal(sv.target, 120000);
+  assert.equal(sv.status, 'ahead');
+  // Target 40% → $1,600: behind by $180 → about $11.25/day over 16 days
+  const sv40 = savingProjection(m, 40);
+  assert.equal(sv40.gap, -18000);
+  assert.equal(sv40.status, 'behind');
+  assert.equal(sv40.perDayCut, 1125);
+  // Past month: actual
+  const oct = savingProjection(computeMonth(s, '2026-10', '2026-11-15'), 30);
+  assert.equal(oct.hasIncome, false);
+});
+
+test('a payday transfer follows the paycheck schedule, including weekend adjustment', () => {
+  const s = baseState({ budgets: [] });
+  s.incomeSources = [{ id: 'job', name: 'Pay', kind: 'paycheck', amountCents: 300000, frequency: 'semimonthly', semimonthlyDays: [15, 31], weekendAdjust: 'before', anchorDate: '2026-01-01' }];
+  s.bills = [{ id: 'xfer', name: 'Roth IRA', categoryId: 'savings', amountCents: 40000, frequency: 'monthly', dayOfMonth: 1, startDate: '2026-11-01' }];
+  s.settings.prefs = { billSources: { xfer: 'job' } };
+  const m = computeMonth(s, '2026-11', '2026-11-02');
+  assert.deepEqual(m.transfers.occurrences.map(o => o.date), ['2026-11-13', '2026-11-30']); // Nov 15 is a Sunday
+  assert.equal(m.savings.plan, 80000);
+  // Without the link it would just be monthly on the 1st
+  s.settings.prefs = {};
+  assert.deepEqual(computeMonth(s, '2026-11', '2026-11-02').transfers.occurrences.map(o => o.date), ['2026-11-01']);
+});
+
+test('sweep keeps enough to live on until payday and never sweeps during a shortfall', () => {
+  // $1,000 budget/month (≈$33.33/day). Nov 29, payday Dec 4 → 5 days to cover ≈ $166.67.
+  const s = baseState({ settings: { balanceCents: 40000, balanceDate: '2026-11-29', balanceSetAt: '2026-11-29T08:00:00Z', bufferCents: 0 }, bills: [] });
+  s.incomeSources[0].anchorDate = '2026-12-04';
+  s.transactions = [pay('2026-11-06', 200000), pay('2026-11-20', 200000), tx('2026-11-10', 50000, 'groceries'), tx('2026-11-21', 50000, 'savings')];
+  const m = computeMonth(s, '2026-11', '2026-11-29');
+  assert.equal(m.variable.budgetRemaining, 50000);
+  assert.equal(m.cash.untilPay.days, 5);
+  assert.equal(sweepAmount(m), 40000 - Math.round(100000 / 30 * 5)); // $233.33, not the full $500
+  // Rent due before payday larger than the balance: no sweep at all
+  s.bills = [{ id: 'rent', name: 'Rent', categoryId: 'housing', amountCents: 150000, frequency: 'monthly', dayOfMonth: 1 }];
+  const m2 = computeMonth(s, '2026-11', '2026-11-29');
+  assert.ok(m2.cash.untilPay.shortfall > 0);
+  assert.equal(sweepAmount(m2), 0);
+});
