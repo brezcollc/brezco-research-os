@@ -14,6 +14,7 @@ async function open({ today = '2026-11-22', device = 'iPhone 14 Pro', query = ''
     route.fulfill({ status: 200, body: fs.readFileSync(full), headers: { 'content-type': TYPES[path.extname(full)] || 'application/octet-stream' } });
   });
   const p = await ctx.newPage();
+  p.setDefaultTimeout(15000);
   const errs = [];
   p.on('pageerror', e => errs.push('pageerror: ' + e.message));
   p.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });

@@ -125,19 +125,24 @@ export function buildDemo(existingCategories, today) {
   const monthly = { id: newId(), name: 'Save $500 every month', kind: 'monthly', targetCents: 50000, startingCents: 0, icon: '📈', color: '#a78bfa', archived: false, ...D };
   rows.goals.push(emergency, trip, monthly);
 
+  // Pay yourself first: $250 to the brokerage account every payday (follows the paycheck schedule).
+  const xfer = { id: newId(), name: 'Brokerage', categoryId: cat('Savings').id, amountCents: 25000, frequency: 'biweekly', anchorDate: payAnchor, startDate: start, autopay: false, active: true, ...D };
+  rows.bills.push(xfer);
+
   const T = (date, cents, categoryId, merchant, extra = {}) =>
     rows.transactions.push({ id: newId(), kind: 'expense', date, amountCents: cents, categoryId, merchant, notes: '', createdAt: created(date), ...D, ...extra });
 
   // Income received + savings moved on each payday that has already happened.
   for (const d of occurrences(job, start, today)) {
     rows.transactions.push({ id: newId(), kind: 'income', date: d, amountCents: job.amountCents, incomeSourceId: job.id, incomeDate: d, merchant: 'Acme Corp payroll', createdAt: created(d), ...D });
-    T(d, 25000, cat('Savings').id, 'Transfer to savings', { goalId: emergency.id });
+    T(d, 25000, cat('Savings').id, 'Brokerage', { goalId: emergency.id, billId: xfer.id, billDate: d });
   }
   for (const d of occurrences(side, start, addDays(today, -1))) {
     rows.transactions.push({ id: newId(), kind: 'income', date: d, amountCents: side.amountCents, incomeSourceId: side.id, incomeDate: d, merchant: 'Client invoice', createdAt: created(d), ...D });
   }
   // Bills paid on their due date (anything due today is left for you to mark paid).
   for (const b of rows.bills) {
+    if (b === xfer) continue;
     for (const d of occurrences(b, start, addDays(today, -1))) {
       const amt = b.name === 'Electric' ? b.amountCents + between(-18, 22) : b.amountCents;
       T(d, amt, b.categoryId, b.name, { billId: b.id, billDate: d });
@@ -163,6 +168,7 @@ export function buildDemo(existingCategories, today) {
   }
   rows.transactions.push({ id: newId(), kind: 'expense', date: addDays(today, -2), amountCents: -2499, categoryId: cat('Shopping').id, merchant: 'Amazon', notes: 'Refund — returned headphones', createdAt: created(addDays(today, -2)), ...D });
 
-  const settings = { balanceCents: 165000, balanceDate: addDays(start, -1), balanceSetAt: `${addDays(start, -1)}T23:59:00.000Z`, bufferCents: 20000, demoBalance: true };
+  const settings = { balanceCents: 165000, balanceDate: addDays(start, -1), balanceSetAt: `${addDays(start, -1)}T23:59:00.000Z`, bufferCents: 20000, demoBalance: true,
+    prefs: { billSources: { [xfer.id]: job.id }, billGoals: { [xfer.id]: emergency.id }, savingsTargetPct: 25, demoTarget: true } };
   return { categories: [...newCats], rows, settings };
 }

@@ -274,6 +274,12 @@ class Store {
     this.batch(tx => {
       for (const c of COLLECTIONS) for (const r of this.state[c].slice()) if (r.isDemo) tx.remove(c, r.id);
       if (this.state.settings.demoBalance) tx.settings({ balanceCents: null, balanceDate: null, balanceSetAt: null, demoBalance: false });
+      // Drop sample-only preferences (transfer links for deleted bills, the sample savings target).
+      const prefs = { ...(this.state.settings.prefs || {}) };
+      const billIds = new Set(this.state.bills.map(b => b.id));
+      for (const k of ['billSources', 'billGoals']) if (prefs[k]) prefs[k] = Object.fromEntries(Object.entries(prefs[k]).filter(([id]) => billIds.has(id)));
+      if (prefs.demoTarget) { delete prefs.savingsTargetPct; delete prefs.demoTarget; }
+      tx.settings({ prefs });
     });
   }
   hasDemo() { return COLLECTIONS.some(c => this.state[c].some(r => r.isDemo)); }

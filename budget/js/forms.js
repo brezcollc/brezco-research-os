@@ -3,9 +3,10 @@ import { store } from './store.js';
 import { ui, today } from './ctx.js';
 import { esc, icon, openSheet, closeSheet, sheetHeader, toast, confirmSheet } from './ui.js';
 import { parseMoney, toDecimal, fmt } from './money.js';
-import { addDays, diffDays, fmtDate, fmtMonth, monthKey, monthStart, isValidISO } from './dates.js';
-import { FREQ_LABELS } from './schedule.js';
+import { addDays, diffDays, fmtDate, fmtMonth, monthKey, monthStart, isValidISO, dayOf } from './dates.js';
+import { FREQ_LABELS, occurrences, describeRule } from './schedule.js';
 import { categoryIndex, billOccurrences, incomeOccurrences, computeMonth } from './engine.js';
+import { linkGoal, payDefaultDate } from './savings.js';
 
 const S = () => store.state;
 
@@ -98,6 +99,7 @@ export function openTxForm(opts = {}) {
     <span class="field-label">Date</span>
     <div class="date-chips"><button type="button" data-date="${t}">Today</button><button type="button" data-date="${addDays(t, -1)}">Yesterday</button><input class="input" type="date" name="date" value="${f.date}" aria-label="Date"></div>
     <label class="field"><span>Notes (optional)</span><input class="input" name="notes" autocomplete="off" value="${esc(ex?.notes || '')}"></label>
+    ${ex && ex.kind === 'expense' && !ex.billId && ex.amountCents > 0 ? `<button type="button" class="btn block ghost" data-recurring style="color:var(--green);margin:-4px 0 4px">${icon('sync')} Make this recurring</button>` : ''}
     ${footer(ex ? 'Save changes' : 'Add', ex ? `<button type="button" class="btn danger" data-del style="flex:0 0 auto">${icon('trash')}</button>` : '')}`;
 
   formSheet(html, (fd) => {
@@ -119,7 +121,7 @@ export function openTxForm(opts = {}) {
       row.kind = 'expense'; row.categoryId = f.categoryId;
       row.amountCents = f.kind === 'expense' && f.refund ? -c : c;
       if (f.kind === 'savings') row.goalId = f.goalId || null;
-      const key = f.kind === 'expense' && !f.refund ? currentBillKey() : null;
+      const key = (f.kind === 'expense' && !f.refund) || f.kind === 'savings' ? currentBillKey() : null;
       if (key) { const [bid, bdate] = key.split('|'); row.billId = bid; row.billDate = bdate; }
     }
     const before = ex ? { ...ex } : null;
@@ -154,6 +156,7 @@ export function openTxForm(opts = {}) {
         const m = merchants.get(e.target.value.trim().toLowerCase());
         if (m && !f.catTouched && m.kind === 'expense' && m.categoryId && idx.byId.has(m.categoryId) && f.kind === 'expense') { f.categoryId = m.categoryId; renderDyn(); }
       });
+      form.querySelector('[data-recurring]')?.addEventListener('click', () => { closeSheet(); makeRecurring(ex.id); });
       form.querySelector('[data-del]')?.addEventListener('click', async () => {
         const ok = await confirmSheet({ title: 'Delete transaction?', body: 'This updates all your totals immediately.', ok: 'Delete', danger: true });
         if (!ok) return;
@@ -181,6 +184,8 @@ export function openTxForm(opts = {}) {
           if (!savs.length) h += `<div class="banner warn">Create a savings category first (Settings → Categories).</div>`;
           const goals = st.goals.filter(g => !g.archived && g.kind === 'target');
           h += select('goalId', 'Toward goal', [['', 'No specific goal'], ...goals.map(g => [g.id, `${g.icon || '🎯'} ${g.name}`])], f.goalId);
+          const xfers = billCandidates();
+          if (xfers.length) h += select('billKey', 'Is this a scheduled transfer?', [['', 'No — extra savings'], ...xfers.map(o => [`${o.billId}|${o.date}`, `${o.name} — ${fmtDate(o.date)} · ${fmt(o.amountCents)}`])], currentBillKey());
         } else {
           h += catGrid();
           const bills = billCandidates();
@@ -321,28 +326,29 @@ export function openReceiveIncome(sourceId, d) {
 /* ====================================================================== */
 /* BILLS                                                                  */
 /* ====================================================================== */
-export function openBillForm(id) {
+export function openBillForm(id, { prefill = null, onSaved = null } = {}) {
   const st = S(), t = today(), idx = categoryIndex(st);
   const b = id ? st.bills.find(x => x.id === id) : null;
+  const v = b || prefill || null; // values shown in the form
   const fixedCats = st.categories.filter(c => !c.archived && idx.kindOf(c.id) === 'fixed');
   const otherCats = st.categories.filter(c => !c.archived && idx.kindOf(c.id) === 'variable');
   const catOpts = [
-    `<optgroup label="Fixed">${fixedCats.map(c => `<option value="${c.id}" ${b?.categoryId === c.id ? 'selected' : ''}>${esc((c.parentId ? '  ↳ ' : '') + c.name)}</option>`).join('')}</optgroup>`,
-    `<optgroup label="Other">${otherCats.map(c => `<option value="${c.id}" ${b?.categoryId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>`,
+    `<optgroup label="Fixed">${fixedCats.map(c => `<option value="${c.id}" ${v?.categoryId === c.id ? 'selected' : ''}>${esc((c.parentId ? '  ↳ ' : '') + c.name)}</option>`).join('')}</optgroup>`,
+    `<optgroup label="Other">${otherCats.map(c => `<option value="${c.id}" ${v?.categoryId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>`,
   ];
   const freqs = ['monthly', 'weekly', 'biweekly', 'quarterly', 'semiannual', 'annually', 'custom', 'once'].map(k => [k, FREQ_LABELS[k]]);
   const html = `${sheetHeader(b ? 'Edit bill' : 'Add recurring bill')}
-    ${text('name', 'Name', b?.name || '', { placeholder: 'e.g. Rent, Netflix, Car insurance', required: true })}
-    ${money('amount', 'Amount', b?.amountCents ?? null, { required: true })}
-    ${select('categoryId', 'Category', catOpts, b?.categoryId)}
-    ${select('frequency', 'How often', freqs, b?.frequency || 'monthly')}
-    ${select('dayOfMonth', 'Due on', dayOptions, b?.dayOfMonth || (b?.anchorDate ? Number(b.anchorDate.slice(8)) : 1), { when: 'monthly' })}
-    ${date('anchorDate', 'Next due date', b?.anchorDate || t, { when: 'weekly biweekly quarterly semiannual annually custom once' })}
-    <label class="field" data-when="custom"><span>Every how many days?</span><input class="input" name="intervalDays" inputmode="numeric" value="${b?.intervalDays || 30}"></label>
-    ${check('autopay', 'Autopay', b?.autopay)}
-    <div class="row2" data-when="weekly biweekly monthly quarterly semiannual annually custom">${date('startDate', 'Tracking starts', b ? b.startDate : monthStart(monthKey(t)))}${date('endDate', 'Ends (optional)', b?.endDate || '')}</div>
+    ${text('name', 'Name', v?.name || '', { placeholder: 'e.g. Rent, Netflix, Car insurance', required: true })}
+    ${money('amount', 'Amount', v?.amountCents ?? null, { required: true })}
+    ${select('categoryId', 'Category', catOpts, v?.categoryId)}
+    ${select('frequency', 'How often', freqs, v?.frequency || 'monthly')}
+    ${select('dayOfMonth', 'Due on', dayOptions, v?.dayOfMonth || (v?.anchorDate ? Number(b.anchorDate.slice(8)) : 1), { when: 'monthly' })}
+    ${date('anchorDate', 'Next due date', v?.anchorDate || t, { when: 'weekly biweekly quarterly semiannual annually custom once' })}
+    <label class="field" data-when="custom"><span>Every how many days?</span><input class="input" name="intervalDays" inputmode="numeric" value="${v?.intervalDays || 30}"></label>
+    ${check('autopay', 'Autopay', v?.autopay)}
+    <div class="row2" data-when="weekly biweekly monthly quarterly semiannual annually custom">${date('startDate', 'Tracking starts', v && 'startDate' in v ? v.startDate : monthStart(monthKey(t)))}${date('endDate', 'Ends (optional)', v?.endDate || '')}</div>
     ${b ? check('active', 'Active', b.active !== false) : ''}
-    ${text('notes', 'Notes (optional)', b?.notes || '')}
+    ${text('notes', 'Notes (optional)', v?.notes || '')}
     <p class="hint">Unpaid bills are treated as committed money — they come out of “safe to spend” before their due date.</p>
     ${footer(b ? 'Save' : 'Add bill', b ? `<button type="button" class="btn danger" data-del style="flex:0 0 auto">${icon('trash')}</button>` : '')}`;
   formSheet(html, fd => {
@@ -360,8 +366,9 @@ export function openBillForm(id) {
     if (['quarterly', 'semiannual', 'annually'].includes(freq)) row.dayOfMonth = Number(row.anchorDate.slice(8));
     if (freq === 'custom') { row.intervalDays = parseInt(fd.get('intervalDays'), 10); need(row.intervalDays > 0, 'Enter a number of days.'); }
     if (row.startDate && row.anchorDate && row.startDate > row.anchorDate && freq !== 'monthly') row.startDate = null;
-    store.upsert('bills', row);
+    const saved = store.upsert('bills', row);
     toast(b ? 'Bill updated' : 'Bill added');
+    onSaved?.(saved);
   }, {
     onMount: (sh, form) => form.querySelector('[data-del]')?.addEventListener('click', async () => {
       const ok = await confirmSheet({ title: `Delete “${esc(b.name)}”?`, body: 'Upcoming payments are removed. Payments you already logged stay in your history.', ok: 'Delete', danger: true });
@@ -378,8 +385,7 @@ export function openPayBill(billId, due) {
   // Default to the due date only if that still lowers the balance (it's on/after the day the
   // balance was last set). Otherwise the app treated this money as still in the account, so
   // paying it now must reduce the balance: default to today.
-  const anchor = st.settings.balanceDate;
-  const payDefault = due > t ? t : (!anchor || due >= anchor ? due : t);
+  const payDefault = payDefaultDate(st, due, t);
   const html = `${sheetHeader(`Pay ${b.name}`)}
     <p class="muted" style="margin:-4px 0 16px">Due ${fmtDate(due)} · scheduled ${fmt(b.amountCents)}</p>
     ${money('amount', 'Amount paid', b.amountCents, { required: true })}
@@ -678,5 +684,152 @@ export function openPasswordForm() {
     const { cloud } = await import('./cloud.js');
     await cloud.updatePassword(pw);
     toast('Password updated');
+  });
+}
+
+/* ====================================================================== */
+/* SAVINGS-FIRST                                                          */
+/* ====================================================================== */
+
+/** Turn a logged expense into a recurring bill (or a scheduled transfer) and link it. */
+export function makeRecurring(txId) {
+  const st = S(), idx = categoryIndex(st);
+  const t0 = st.transactions.find(x => x.id === txId);
+  if (!t0) return;
+  const prefill = {
+    name: t0.merchant || idx.byId.get(t0.categoryId)?.name || 'Bill', amountCents: t0.amountCents, categoryId: t0.categoryId,
+    frequency: 'monthly', dayOfMonth: dayOf(t0.date), anchorDate: t0.date, startDate: monthStart(monthKey(t0.date)),
+  };
+  const link = bill => {
+    const due = occurrences(bill, t0.date, t0.date)[0];
+    if (due) store.upsert('transactions', { ...S().transactions.find(x => x.id === txId), billId: bill.id, billDate: due });
+  };
+  if (idx.kindOf(t0.categoryId) === 'savings') openTransferForm(null, { prefill, onSaved: link });
+  else openBillForm(null, { prefill, onSaved: link });
+}
+
+/** Savings target as a share of take-home pay. */
+export function openTargetForm() {
+  const st = S(), t = today();
+  const prefs = st.settings.prefs || {};
+  const m = computeMonth(st, monthKey(t), t);
+  const inc = m.income.expectedCents;
+  const html = `${sheetHeader('Savings target')}
+    <p class="muted" style="margin:-4px 0 16px;line-height:1.5">What share of your take-home pay do you want to keep — saved or invested instead of spent?</p>
+    <label class="field"><span>Target (% of take-home)</span><input class="input num" name="pct" inputmode="numeric" placeholder="e.g. 30" value="${prefs.savingsTargetPct ?? ''}"></label>
+    <div class="suggest">${[10, 20, 30, 40, 50].map(n => `<button type="button" data-pct="${n}">${n}%</button>`).join('')}</div>
+    <p class="hint" data-preview></p>
+    ${footer('Save target', prefs.savingsTargetPct ? '<button type="button" class="btn" data-clear style="flex:0 0 auto">Remove</button>' : '')}`;
+  formSheet(html, fd => {
+    const raw = String(fd.get('pct') || '').trim();
+    const n = Number(raw);
+    need(raw && Number.isFinite(n) && n > 0 && n < 100, 'Enter a percentage between 1 and 99.');
+    store.updateSettings({ prefs: { ...(S().settings.prefs || {}), savingsTargetPct: Math.round(n) } });
+    toast(`Target set: keep ${Math.round(n)}% of take-home`);
+  }, {
+    onMount: (sh, form) => {
+      const input = form.querySelector('[name="pct"]');
+      const prev = () => {
+        const n = Number(input.value);
+        form.querySelector('[data-preview]').textContent = inc > 0 && n > 0 && n < 100
+          ? `This month that's ${fmt(Math.round(inc * n / 100))} of ${fmt(inc)} expected take-home.` : '';
+      };
+      input.addEventListener('input', prev); prev();
+      form.querySelectorAll('[data-pct]').forEach(b => b.addEventListener('click', () => { input.value = b.dataset.pct; prev(); }));
+      form.querySelector('[data-clear]')?.addEventListener('click', () => {
+        const p = { ...(S().settings.prefs || {}) }; delete p.savingsTargetPct;
+        store.updateSettings({ prefs: p }); closeSheet(); toast('Target removed');
+      });
+    },
+  });
+}
+
+/** Scheduled "pay yourself first" transfer — a recurring entry in a savings category. */
+export function openTransferForm(id, { prefill = null, onSaved = null } = {}) {
+  const st = S(), t = today(), idx = categoryIndex(st);
+  const b = id ? st.bills.find(x => x.id === id) : null;
+  const v = b || prefill || {};
+  const prefs = st.settings.prefs || {};
+  const savCats = st.categories.filter(c => !c.archived && idx.kindOf(c.id) === 'savings');
+  if (!savCats.length) { toast('Create a Savings category first (Settings → Categories)'); return; }
+  const pays = st.incomeSources.filter(x => x.active !== false && x.frequency !== 'once');
+  const curSrc = b ? prefs.billSources?.[b.id] : pays.find(x => (x.kind || 'paycheck') === 'paycheck')?.id;
+  const schedOpts = [...pays.map(x => [`src:${x.id}`, `Every payday — ${x.name}`]), ['monthly', 'Once a month']];
+  const schedVal = curSrc && pays.some(x => x.id === curSrc) ? `src:${curSrc}` : (b ? 'monthly' : schedOpts[0][0]);
+  const goals = st.goals.filter(g => !g.archived && g.kind === 'target');
+  const html = `${sheetHeader(b ? 'Edit transfer' : 'Pay yourself first')}
+    <p class="muted" style="margin:-4px 0 16px;line-height:1.5">Move money to savings or investing as soon as you're paid. It's set aside before anything counts as safe to spend.</p>
+    ${money('amount', 'Amount each time', v.amountCents ?? null, { required: true })}
+    ${select('categoryId', 'Into', savCats.map(c => [c.id, (c.parentId ? '↳ ' : '') + c.name]), v.categoryId || savCats[0].id)}
+    ${select('sched', 'When', schedOpts, schedVal)}
+    <div data-monthly>${select('dayOfMonth', 'Day of month', dayOptions, v.dayOfMonth || 1)}</div>
+    ${goals.length ? select('goalId', 'Counts toward goal (optional)', [['', 'No specific goal'], ...goals.map(g => [g.id, g.name])], b ? (prefs.billGoals?.[b.id] || '') : '') : ''}
+    ${text('name', 'Label', v.name || '', { placeholder: 'e.g. Brokerage, Roth IRA, Emergency fund' })}
+    ${b ? check('active', 'Active', b.active !== false) : ''}
+    ${footer(b ? 'Save' : 'Schedule transfer', b ? `<button type="button" class="btn danger" data-del style="flex:0 0 auto">${icon('trash')}</button>` : '')}`;
+  formSheet(html, fd => {
+    const amountCents = cents(fd, 'amount');
+    const categoryId = String(fd.get('categoryId'));
+    const sched = String(fd.get('sched'));
+    const name = String(fd.get('name') || '').trim() || idx.byId.get(categoryId)?.name || 'Savings';
+    const row = { id: b?.id, name, amountCents, categoryId, autopay: false, active: b ? fd.get('active') === 'on' : true,
+      anchorDate: null, startDate: null, endDate: null, dayOfMonth: null, intervalDays: null, frequency: 'monthly', notes: null };
+    let srcId = null;
+    if (sched.startsWith('src:')) {
+      const src = pays.find(x => x.id === sched.slice(4));
+      need(src, 'Pick a pay schedule.');
+      srcId = src.id;
+      // Copy the paycheck's schedule so transfers land on paydays.
+      Object.assign(row, { frequency: src.frequency, anchorDate: src.anchorDate, dayOfMonth: src.dayOfMonth || null, intervalDays: src.intervalDays || null,
+        semimonthlyDays: src.semimonthlyDays || null, weekendAdjust: src.weekendAdjust || 'none' });
+      if (src.frequency === 'semimonthly') { row.frequency = 'semimonthly'; }
+    } else {
+      row.dayOfMonth = Number(fd.get('dayOfMonth'));
+      row.anchorDate = monthStart(monthKey(t));
+    }
+    // New transfers start today: earlier paydays this month came before the plan existed.
+    row.startDate = b?.startDate || t;
+    if (prefill?.startDate && !b) row.startDate = prefill.startDate;
+    const saved = store.upsert('bills', row);
+    const p = { ...(S().settings.prefs || {}) };
+    p.billSources = { ...(p.billSources || {}) }; p.billGoals = { ...(p.billGoals || {}) };
+    if (srcId) p.billSources[saved.id] = srcId; else delete p.billSources[saved.id];
+    const goalId = String(fd.get('goalId') || '');
+    if (goalId) p.billGoals[saved.id] = goalId; else delete p.billGoals[saved.id];
+    store.updateSettings({ prefs: p });
+    toast(b ? 'Transfer updated' : `Scheduled · ${fmt(amountCents)} ${describeRule(saved).toLowerCase()}`);
+    onSaved?.(saved);
+  }, {
+    onMount: (sh, form) => {
+      const sel = form.querySelector('[name="sched"]');
+      const sync = () => form.querySelector('[data-monthly]').classList.toggle('hidden', sel.value !== 'monthly');
+      sel.addEventListener('change', sync); sync();
+      form.querySelector('[data-del]')?.addEventListener('click', async () => {
+        const ok = await confirmSheet({ title: 'Delete this transfer?', body: 'Future scheduled transfers stop. Money you already moved stays recorded.', ok: 'Delete', danger: true });
+        if (ok) { store.remove('bills', b.id); closeSheet(); toast('Transfer deleted'); }
+      });
+    },
+  });
+}
+
+/** Move money to savings now (also used for the month-end sweep). */
+export function openMoveSheet({ amountCents = null, merchant = 'Transfer to savings', title = 'Move to savings' } = {}) {
+  const st = S(), t = today(), idx = categoryIndex(st);
+  const savCats = st.categories.filter(c => !c.archived && idx.kindOf(c.id) === 'savings');
+  if (!savCats.length) { toast('Create a Savings category first (Settings → Categories)'); return; }
+  const goals = st.goals.filter(g => !g.archived && g.kind === 'target');
+  const html = `${sheetHeader(title)}
+    ${money('amount', 'Amount', amountCents, { required: true })}
+    ${select('categoryId', 'Into', savCats.map(c => [c.id, (c.parentId ? '↳ ' : '') + c.name]), savCats[0].id)}
+    ${goals.length ? select('goalId', 'Counts toward goal (optional)', [['', 'No specific goal'], ...goals.map(g => [g.id, g.name])], '') : ''}
+    ${date('date', 'Date', t, { required: true })}
+    <p class="hint">Recorded as a transfer out of checking. It isn't spending, and it lowers what's left to spend this month.</p>
+    ${footer('Move it')}`;
+  formSheet(html, fd => {
+    const c = cents(fd, 'amount');
+    const d = String(fd.get('date'));
+    need(isValidISO(d), 'Pick a date.');
+    const saved = store.upsert('transactions', { kind: 'expense', date: d, amountCents: c, categoryId: String(fd.get('categoryId')), goalId: String(fd.get('goalId') || '') || null, merchant });
+    toast(`Moved ${fmt(c)} to savings`, { action: 'Undo', onAction: () => store.remove('transactions', saved.id) });
   });
 }

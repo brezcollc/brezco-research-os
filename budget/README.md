@@ -53,6 +53,19 @@ supabase/schema.sql   tables, RLS policies, indexes
 | `budget_transactions` | one ledger. `income` rows confirm expected pay (`income_source_id`+`income_date`). `expense` rows can pay a bill (`bill_id`+`bill_date`), move money to savings (savings category, optional `goal_id`), or be a refund (negative amount) |
 | `budget_goals` | target goals (amount by an optional date) or monthly savings goals |
 
+### Saving first
+- **Savings target**: a share of take-home you want to keep. The dashboard projects what you'll keep this month
+  (expected take-home − bills − discretionary spending at your current pace) and compares it with the target.
+  Stored in `budget_settings.prefs.savingsTargetPct`.
+- **Pay yourself first**: scheduled transfers are rows in `budget_bills` whose category is a *savings* category.
+  They're never counted as bills or spending; they raise the month's savings plan, which is reserved before
+  anything is safe to spend. "Every payday" transfers follow the linked paycheck's schedule
+  (`prefs.billSources`), and can count toward a goal (`prefs.billGoals`). No schema change was needed.
+- **Month-end sweep**: in the last days of the month, unspent discretionary budget can be moved to savings
+  in one step. The offer keeps enough cash to live on until the next paycheck and is never made while bills
+  before payday aren't covered. Saving more than planned reduces what's left to spend.
+- **Make this recurring**: any logged expense can become a recurring bill (or transfer), linked to that payment.
+
 ### How "safe to spend" is calculated
 The app never just subtracts expenses from income:
 
@@ -83,6 +96,7 @@ treated as already included.
 node --test budget/tests/*.test.mjs        # 21 financial scenarios + 6 sync tests
 node budget/tests/ui.e2e.cjs               # 15-step Playwright run at iPhone size
 node budget/tests/ui.cloud.e2e.cjs         # sign-in + sync against a fake Supabase (tests/fake-supabase.js)
+node budget/tests/ui.savings.e2e.cjs       # savings target, payday transfers, sweep, make-recurring
 ```
 The scenarios cover: biweekly pay with three-paycheck months, bills due on the 31st (Feb 28/29,
 Apr 30), twice-monthly pay with weekend adjustment, quarterly and yearly bills (including Feb 29),

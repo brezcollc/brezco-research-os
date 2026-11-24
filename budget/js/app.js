@@ -3,7 +3,9 @@ import { store, Store } from './store.js';
 import { ui, today } from './ctx.js';
 import { icon, esc, closeSheet, closeAllSheets, toast, confirmSheet, saveFile } from './ui.js';
 import { addMonths, monthKey } from './dates.js';
-import { computeMonth } from './engine.js';
+import { computeMonth, sweepAmount, categoryIndex } from './engine.js';
+import { recordTransfer } from './savings.js';
+import { fmt } from './money.js';
 import * as V from './views.js';
 import * as F from './forms.js';
 import { defaultCategoryRows, buildDemo } from './demo.js';
@@ -108,7 +110,12 @@ function loadDemo() {
     for (const c of d.categories) tx.upsert('categories', c);
     for (const [coll, rows] of Object.entries(d.rows)) for (const r of rows) tx.upsert(coll, r);
     const s = store.state.settings;
-    if (s.balanceCents === null || s.balanceCents === undefined || s.demoBalance) tx.settings({ ...d.settings, prefs: { ...(s.prefs || {}), initialized: true } });
+    const prefs = { ...(s.prefs || {}), initialized: true,
+      billSources: { ...(s.prefs?.billSources || {}), ...d.settings.prefs.billSources },
+      billGoals: { ...(s.prefs?.billGoals || {}), ...d.settings.prefs.billGoals } };
+    if (!s.prefs?.savingsTargetPct) { prefs.savingsTargetPct = d.settings.prefs.savingsTargetPct; prefs.demoTarget = true; }
+    if (s.balanceCents === null || s.balanceCents === undefined || s.demoBalance) tx.settings({ ...d.settings, prefs });
+    else tx.settings({ prefs });
   });
   toast('Sample data loaded — remove it any time in Settings');
 }
@@ -122,6 +129,10 @@ async function startCloudSession(session) {
 }
 
 /* ---------------- actions ---------------- */
+const isTransfer = billId => {
+  const b = store.state.bills.find(x => x.id === billId);
+  return !!b && categoryIndex(store.state).kindOf(b.categoryId) === 'savings';
+};
 const A = {
   noop() {},
   tab: d => go(d.tab),
@@ -148,7 +159,19 @@ const A = {
   editIncome: d => F.openIncomeForm(d.id),
   receiveIncome: d => F.openReceiveIncome(d.source, d.date),
   newBill: () => F.openBillForm(),
-  editBill: d => F.openBillForm(d.id),
+  editBill: d => (isTransfer(d.id) ? F.openTransferForm(d.id) : F.openBillForm(d.id)),
+  newTransfer: () => F.openTransferForm(),
+  editTransfer: d => F.openTransferForm(d.id),
+  editTarget: () => F.openTargetForm(),
+  moveMoney: () => F.openMoveSheet(),
+  sweep: () => {
+    const m = computeMonth(store.state, monthKey(today()), today());
+    F.openMoveSheet({ amountCents: sweepAmount(m) || null, merchant: 'Month-end sweep', title: 'Sweep leftover to savings' });
+  },
+  moveTransfer: d => {
+    const saved = recordTransfer(store.state, d.bill, d.date, today());
+    if (saved) toast(`Moved ${fmt(saved.amountCents)} · ${saved.merchant}`, { action: 'Undo', onAction: () => store.remove('transactions', saved.id) });
+  },
   payBill: d => F.openPayBill(d.bill, d.date),
   newCategory: d => F.openCategoryForm(null, { parentId: d.parent || null }),
   editCategory: d => F.openCategoryForm(d.id),

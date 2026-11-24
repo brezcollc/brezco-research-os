@@ -1,11 +1,11 @@
 /* sw.js — offline support. App files: network-first (always fresh when online,
    cached copy when offline). Pinned CDN modules: cache-first. */
-const VERSION = 'runway-v1.0.1';
+const VERSION = 'runway-v1.1.0';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/ctx.js', './js/store.js', './js/cloud.js', './js/config.js', './js/engine.js',
   './js/schedule.js', './js/dates.js', './js/money.js', './js/views.js', './js/forms.js', './js/charts.js',
-  './js/ui.js', './js/demo.js', './js/csv.js',
+  './js/ui.js', './js/demo.js', './js/csv.js', './js/savings.js',
   './icons/icon.svg', './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
 ];
 

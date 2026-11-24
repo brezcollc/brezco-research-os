@@ -84,6 +84,15 @@ export function incomeOccurrences(state, from, to) {
   return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
+/** A transfer set to "every payday" follows its paycheck's current schedule. */
+function billRule(state, b, follows) {
+  const src = follows[b.id] && state.incomeSources.find(x => x.id === follows[b.id]);
+  if (!src || src.active === false) return b;
+  const endDate = [b.endDate, src.endDate].filter(Boolean).sort()[0] || null;
+  return { frequency: src.frequency, anchorDate: src.anchorDate, dayOfMonth: src.dayOfMonth, semimonthlyDays: src.semimonthlyDays,
+    intervalDays: src.intervalDays, weekendAdjust: src.weekendAdjust, startDate: b.startDate || src.startDate, endDate };
+}
+
 /** Bill occurrences in [from,to] with their paid status. */
 export function billOccurrences(state, from, to) {
   const out = [];
@@ -91,9 +100,10 @@ export function billOccurrences(state, from, to) {
   for (const t of state.transactions) {
     if (t.kind === 'expense' && t.billId && t.billDate) paid.set(`${t.billId}|${t.billDate}`, t);
   }
+  const follows = state.settings?.prefs?.billSources || {};
   for (const b of state.bills) {
     if (b.active === false) continue;
-    for (const date of occurrences(b, from, to)) {
+    for (const date of occurrences(billRule(state, b, follows), from, to)) {
       const tx = paid.get(`${b.id}|${date}`) || null;
       out.push({ type: 'bill', billId: b.id, bill: b, name: b.name, categoryId: b.categoryId, date, amountCents: b.amountCents, tx, paid: !!tx });
     }
@@ -205,7 +215,12 @@ export function computeMonth(state, mk, today) {
   }
 
   /* ---- bills ---- */
-  const billOcc = billOccurrences(state, start, end);
+  // Scheduled transfers into a savings category ("pay yourself first") are not bills:
+  // they're tracked as savings, never as spending or fixed commitments.
+  const allBillOcc = billOccurrences(state, start, end);
+  const isTransfer = o => idx.kindOf(o.categoryId) === 'savings';
+  const billOcc = allBillOcc.filter(o => !isTransfer(o));
+  const transferOcc = allBillOcc.filter(isTransfer);
   const unpaidBills = billOcc.filter(o => !o.paid);
   const committedBills = phase === 'past' ? [] : unpaidBills; // includes overdue (still owed)
   const overdueBills = phase === 'current' ? unpaidBills.filter(o => o.date < today) : [];
@@ -256,14 +271,17 @@ export function computeMonth(state, mk, today) {
   const variableSpent = byKind.variable;
   const variable = evaluatePace({ budget: variableBudget, spent: variableSpent, dayOfMonth, dim, phase });
 
-  const savingsPlan = sum(savLines, l => l.budget);
+  // Plan = the larger of the savings budget and what's scheduled to be transferred this month.
+  const savingsPlan = Math.max(sum(savLines, l => l.budget), sum(transferOcc, o => o.amountCents));
   const savingsDone = byKind.savings;
   const savingsRemaining = phase === 'past' ? 0 : Math.max(0, savingsPlan - savingsDone);
 
   /* ---- cash position (current month only) ---- */
   const balanceNow = phase === 'current' ? actualBalance(state, today) : null;
   const hasBalance = balanceNow !== null;
-  const budgetRemaining = Math.max(0, variableBudget - variableSpent);
+  // Saving more than planned (e.g. a month-end sweep) uses up discretionary room.
+  const extraSaved = Math.max(0, savingsDone - savingsPlan);
+  const budgetRemaining = Math.max(0, variableBudget - variableSpent - extraSaved);
 
   let cash = null;
   if (phase === 'current' && hasBalance) {
@@ -340,10 +358,16 @@ export function computeMonth(state, mk, today) {
     spending: { totalSpent, fixedSpent: byKind.fixed, variableSpent, savingsDone, expenses },
     bills: { occurrences: billOcc, unpaid: unpaidBills, overdue: overdueBills, committedCents: committedBillsCents, plannedCents: fixedPlannedCents },
     variable: { ...variable, budget: variableBudget, budgetRemaining },
-    savings: { plan: savingsPlan, done: savingsDone, remaining: savingsRemaining },
+    savings: { plan: savingsPlan, done: savingsDone, remaining: savingsRemaining, extra: extraSaved },
+    transfers: {
+      occurrences: transferOcc,
+      due: phase === 'current' ? transferOcc.filter(o => !o.paid && o.date <= today) : [],
+      upcoming: phase === 'past' ? [] : transferOcc.filter(o => !o.paid && o.date > today),
+    },
     lines, cash, projection, unallocated, planIncome, savingsRate, status, statusReason, buffer,
     plannedSpend: fixedPlannedCents + variableBudget,
   };
+  snap.saving = savingProjection(snap, state.settings?.prefs?.savingsTargetPct ?? null);
   snap.insights = buildInsights(snap);
   return snap;
 }
@@ -385,8 +409,9 @@ export function cashFlow(state, today, days = 42) {
   // Savings still planned this month go out with this month's remaining paychecks; with
   // no paycheck left this month they come out of today's balance.
   const cur = computeMonth(state, monthKey(today), today);
-  let savingsLeft = cur.savings.remaining;
   const curMonth = monthKey(today);
+  const scheduledLeft = sum(cur.transfers.occurrences.filter(o => !o.paid), o => o.amountCents);
+  let savingsLeft = Math.max(0, cur.savings.remaining - scheduledLeft);
 
   const events = [];
   for (const o of inc) events.push({ date: o.date < today ? today : o.date, origDate: o.date, type: 'income', name: o.name, amountCents: o.expectedCents, overdue: o.date < today, ref: o });
@@ -567,6 +592,47 @@ export function categoryBreakdown(state, mk, { kinds = ['fixed', 'variable'] } =
   return [...map.values()].filter(e => e.cents !== 0).sort((a, b) => b.cents - a.cents);
 }
 
+/* ---------------- Savings target ---------------- */
+
+/**
+ * How much of this month's take-home you're on pace to keep (not spend), against an
+ * optional target share. "Kept" = income − spending; transfers to savings are not spending.
+ *   current month: expected income − (fixed paid + unpaid bills) − discretionary at current pace
+ *   past month:    income received − actual spending
+ */
+export function savingProjection(snap, targetPct) {
+  if (snap.phase === 'future') return null;
+  const income = snap.phase === 'past' ? snap.income.receivedCents : snap.income.expectedCents;
+  if (!(income > 0)) return { income: 0, targetPct, hasIncome: false, moved: snap.savings.done };
+  const spend = snap.phase === 'past'
+    ? snap.spending.totalSpent
+    : snap.spending.fixedSpent + snap.bills.committedCents + Math.max(snap.variable.projected, snap.spending.variableSpent);
+  const kept = income - spend;
+  const target = targetPct ? Math.round(income * targetPct / 100) : null;
+  const gap = target === null ? null : kept - target; // + ahead, − behind
+  let status = null;
+  if (target !== null) status = gap >= 0 ? (gap > income * 0.02 ? 'ahead' : 'on_target') : 'behind';
+  const perDayCut = gap !== null && gap < 0 && snap.phase === 'current' ? divCeil(-gap, Math.max(1, snap.remainingDays)) : 0;
+  return {
+    hasIncome: true, income, kept, rate: kept / income, targetPct, target, gap, status, perDayCut,
+    moved: snap.savings.done, toMove: Math.max(0, kept - snap.savings.done),
+  };
+}
+
+/** Money that can be swept to savings now: unspent discretionary budget, backed by cash. */
+export function sweepAmount(snap) {
+  if (snap.phase !== 'current' || !snap.cash) return 0;
+  const u = snap.cash.untilPay;
+  if (u?.shortfall > 0) return 0; // never suggest moving money you need for bills
+  let cap = Math.min(snap.variable.budgetRemaining, snap.cash.monthCapacity);
+  if (u) {
+    // Keep enough to live on until the next paycheck at your usual daily budget.
+    const reserve = Math.round(snap.variable.budget / snap.dim * u.days);
+    cap = Math.min(cap, u.freeCents - reserve);
+  }
+  return Math.max(0, cap);
+}
+
 /* ---------------- Plain-language insights ---------------- */
 
 const pctStr = x => `${Math.round(x * 100)}%`;
@@ -589,6 +655,11 @@ export function buildInsights(snap) {
     out.push({ level: 'warn', key: `overdue-${o.billId}-${o.date}`, title: `${o.name} was due ${fmtDate(o.date)}`,
       body: `Not marked paid yet. It's still counted as money you owe (${fmt(o.amountCents)}).`, action: { type: 'payBill', billId: o.billId, date: o.date } });
   }
+  for (const o of snap.transfers?.due || []) {
+    out.push({ level: 'info', key: `transfer-${o.billId}-${o.date}`, title: `Pay yourself first: ${fmt(o.amountCents)} to ${o.name}`,
+      body: o.date < snap.today ? `Scheduled for ${fmtDate(o.date)} and not moved yet.` : `Scheduled for today. Move it before the money gets spent.`,
+      action: { type: 'moveTransfer', billId: o.billId, date: o.date } });
+  }
   for (const o of snap.income.pendingOverdue) {
     out.push({ level: 'info', key: `unconfirmed-${o.sourceId}-${o.date}`, title: `Did your ${o.name} arrive?`,
       body: `Expected ${fmtDate(o.date)} (${fmt(o.expectedCents)}). Until you confirm it, it isn't counted in your actual balance.`, action: { type: 'receiveIncome', sourceId: o.sourceId, date: o.date } });
@@ -610,6 +681,16 @@ export function buildInsights(snap) {
     }
   }
 
+  if (phase === 'current' && snap.saving?.status === 'behind' && snap.saving.target) {
+    const sv = snap.saving;
+    out.push({ level: 'warn', key: 'savetarget', title: `Behind your ${sv.targetPct}% savings target`,
+      body: `At this pace you'll keep ${fmt(Math.max(0, sv.kept))} of ${fmt(sv.income)} — ${fmt(-sv.gap)} short of ${fmt(sv.target)}. Spending about ${fmt(sv.perDayCut)} less per day closes the gap.` });
+  }
+  if (phase === 'current' && snap.remainingDays <= 3 && snap.cash) {
+    const amt = sweepAmount(snap);
+    if (amt >= 1000) out.push({ level: 'good', key: `sweep-${snap.month}`, title: `${fmt(amt)} left over this month`,
+      body: `The month is almost done and this is still unspent. Move it to savings or investing so it doesn't drift into next month.`, action: { type: 'sweep' } });
+  }
   if (phase === 'current') {
     const v = snap.variable;
     if (v.status === 'ahead' && v.budget > 0) {
@@ -628,8 +709,8 @@ export function buildInsights(snap) {
       out.push({ level: 'danger', key: 'negend', title: `On pace to end the month negative`,
         body: `If you keep spending like this, your balance would be ${fmt(snap.projection.endBalanceAtPace)} on ${fmtDate(monthEnd(snap.month))}.` });
     }
-    if (snap.savings.plan > 0 && snap.savings.remaining > 0 && snap.income.pendingUpcoming.length === 0 && snap.remainingDays <= 7) {
-      out.push({ level: 'warn', key: 'savings', title: `Savings goal not funded yet`,
+    if (snap.savings.plan > 0 && snap.savings.remaining > 0 && snap.income.pendingUpcoming.length === 0 && snap.remainingDays <= 7 && !snap.transfers.due.length) {
+      out.push({ level: 'warn', key: 'savings', title: `Monthly savings not moved yet`,
         body: `${fmt(snap.savings.remaining)} of your ${fmt(snap.savings.plan)} monthly savings hasn't been moved, and no more paychecks are expected this month.` });
     }
     if (snap.unallocated < 0) {
